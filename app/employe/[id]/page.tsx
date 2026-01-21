@@ -23,6 +23,7 @@ interface TimeEntry {
   date: string;
   entryTime: string | null;
   exitTime: string | null;
+  excluded: boolean;
 }
 
 const MONTHS_FR = [
@@ -39,6 +40,7 @@ export default function EmployeeDetailPage() {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingDays, setSavingDays] = useState<Record<string, boolean>>({});
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -64,6 +66,37 @@ export default function EmployeeDetailPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const toggleExcluded = async (dateStr: string, currentExcluded: boolean) => {
+    setSavingDays(prev => ({ ...prev, [dateStr]: true }));
+
+    try {
+      const existingEntry = entries.find(e => e.date === dateStr);
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId,
+          date: dateStr,
+          entryTime: existingEntry?.entryTime || null,
+          exitTime: existingEntry?.exitTime || null,
+          excluded: !currentExcluded,
+        }),
+      });
+
+      if (res.ok) {
+        const savedEntry = await res.json();
+        setEntries(prev => {
+          const filtered = prev.filter(e => e.date !== dateStr);
+          return [...filtered, savedEntry];
+        });
+      }
+    } catch (error) {
+      console.error('Error toggling excluded:', error);
+    } finally {
+      setSavingDays(prev => ({ ...prev, [dateStr]: false }));
+    }
+  };
 
   const prevMonth = () => {
     setCurrentMonth(prev => {
@@ -108,8 +141,11 @@ export default function EmployeeDetailPage() {
     let workDays = 0;
 
     daysInMonth.forEach(day => {
-      if (!day.isWeekend) workDays++;
       const dayEntry = entries.find(e => e.date === day.dateStr);
+
+      if (dayEntry?.excluded) return;
+
+      if (!day.isWeekend) workDays++;
       if (dayEntry) {
         totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
       }
@@ -144,7 +180,6 @@ export default function EmployeeDetailPage() {
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#1A1A1A] pb-8">
-      {/* Header */}
       <header className="bg-[#1A1A1A] text-[#F5F0E6] p-6">
         <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <div>
@@ -170,7 +205,6 @@ export default function EmployeeDetailPage() {
       </header>
 
       <main className="max-w-4xl mx-auto p-6">
-        {/* Month Navigation & Stats */}
         <section className="flex flex-col md:flex-row gap-6 mb-8">
           <div className="bg-[#2D5A9E] p-6 flex-1">
             <div className="flex items-center justify-between">
@@ -203,12 +237,13 @@ export default function EmployeeDetailPage() {
           </div>
         </section>
 
-        {/* Days List */}
         <section className="space-y-2">
           {daysInMonth.map((day, index) => {
             const entry = entries.find(e => e.date === day.dateStr);
+            const isExcluded = entry?.excluded || false;
+            const isSaving = savingDays[day.dateStr] || false;
             const worked = entry ? calculateWorkedHoursFromStrings(entry.entryTime, entry.exitTime) : 0;
-            const expected = day.isWeekend ? 0 : employee.hoursPerWeek / 5;
+            const expected = day.isWeekend || isExcluded ? 0 : employee.hoursPerWeek / 5;
             const surplus = worked - expected;
 
             const accentColor = index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F';
@@ -217,7 +252,7 @@ export default function EmployeeDetailPage() {
               <div
                 key={day.dateStr}
                 className={`border-4 border-[#1A1A1A] flex items-center ${
-                  day.isWeekend ? 'bg-[#E8E3D9] opacity-60' : 'bg-white'
+                  day.isWeekend ? 'bg-[#E8E3D9] opacity-60' : isExcluded ? 'bg-[#E8E3D9] opacity-70' : 'bg-white'
                 }`}
                 style={{ borderLeftColor: accentColor, borderLeftWidth: '6px' }}
               >
@@ -229,7 +264,9 @@ export default function EmployeeDetailPage() {
 
                 {/* Times */}
                 <div className="flex-1 p-3 flex items-center gap-4">
-                  {entry?.entryTime && entry?.exitTime ? (
+                  {isExcluded ? (
+                    <span className="text-[#E63946] font-bold">EXCLU</span>
+                  ) : entry?.entryTime && entry?.exitTime ? (
                     <>
                       <span className="font-bold text-[#666]">
                         {entry.entryTime} → {entry.exitTime}
@@ -245,8 +282,28 @@ export default function EmployeeDetailPage() {
                   )}
                 </div>
 
-                {/* Surplus */}
+                {/* Exclude checkbox */}
                 {!day.isWeekend && (
+                  <label className="p-3 cursor-pointer flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#666]">EXCLURE</span>
+                    <button
+                      onClick={() => toggleExcluded(day.dateStr, isExcluded)}
+                      disabled={isSaving}
+                      className={`w-8 h-8 border-4 border-[#1A1A1A] flex items-center justify-center transition ${
+                        isSaving ? 'bg-[#888]' : isExcluded ? 'bg-[#E63946]' : 'bg-[#F5F0E6] hover:bg-[#FFD23F]'
+                      }`}
+                    >
+                      {isSaving ? (
+                        <span className="text-white text-xs">...</span>
+                      ) : isExcluded ? (
+                        <span className="text-white font-black">X</span>
+                      ) : null}
+                    </button>
+                  </label>
+                )}
+
+                {/* Surplus */}
+                {!day.isWeekend && !isExcluded && (
                   <div className="p-3 w-24 text-center">
                     <p
                       className="font-black"
@@ -262,7 +319,6 @@ export default function EmployeeDetailPage() {
         </section>
       </main>
 
-      {/* Footer Decoration */}
       <footer className="fixed bottom-0 left-0 right-0 h-2 flex">
         <div className="flex-1 bg-[#E63946]"></div>
         <div className="flex-1 bg-[#FFD23F]"></div>

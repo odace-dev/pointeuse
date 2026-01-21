@@ -40,7 +40,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { employeeId, date, entryTime, exitTime } = body;
+    const { employeeId, date, entryTime, exitTime, excluded } = body;
 
     if (!employeeId || !date) {
       return NextResponse.json({ error: 'Employee ID and date are required' }, { status: 400 });
@@ -59,6 +59,7 @@ export async function POST(request: Request) {
         .set({
           entryTime: entryTime || null,
           exitTime: exitTime || null,
+          excluded: excluded ?? existing[0].excluded,
           updatedAt: new Date(),
         })
         .where(eq(timeEntries.id, existing[0].id))
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
         date,
         entryTime: entryTime || null,
         exitTime: exitTime || null,
+        excluded: excluded ?? false,
       }).returning();
       return NextResponse.json(newEntry, { status: 201 });
     }

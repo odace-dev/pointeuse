@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, real, date, time, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, real, date, time, uuid, boolean } from 'drizzle-orm/pg-core';
 
 export const employees = pgTable('employees', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -15,6 +15,7 @@ export const timeEntries = pgTable('time_entries', {
   date: date('date').notNull(),
   entryTime: time('entry_time'),
   exitTime: time('exit_time'),
+  excluded: boolean('excluded').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

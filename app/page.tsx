@@ -25,11 +25,13 @@ interface TimeEntry {
   date: string;
   entryTime: string | null;
   exitTime: string | null;
+  excluded: boolean;
 }
 
 interface LocalEntry {
   entryTime: string;
   exitTime: string;
+  excluded: boolean;
   saved: boolean;
   saving: boolean;
 }
@@ -41,7 +43,6 @@ export default function PointeusePage() {
   const [loading, setLoading] = useState(true);
   const [localEntries, setLocalEntries] = useState<Record<string, LocalEntry>>({});
 
-  // Fetch employees and entries
   const fetchData = useCallback(async () => {
     try {
       const [empRes, entRes] = await Promise.all([
@@ -62,7 +63,6 @@ export default function PointeusePage() {
     fetchData();
   }, [fetchData]);
 
-  // Initialize local entries when date or entries change
   useEffect(() => {
     const newLocalEntries: Record<string, LocalEntry> = {};
     employees.forEach(emp => {
@@ -70,6 +70,7 @@ export default function PointeusePage() {
       newLocalEntries[emp.id] = {
         entryTime: existing?.entryTime || '',
         exitTime: existing?.exitTime || '',
+        excluded: existing?.excluded || false,
         saved: true,
         saving: false,
       };
@@ -77,7 +78,7 @@ export default function PointeusePage() {
     setLocalEntries(newLocalEntries);
   }, [employees, entries, selectedDate]);
 
-  const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime', value: string) => {
+  const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime' | 'excluded', value: string | boolean) => {
     setLocalEntries(prev => ({
       ...prev,
       [employeeId]: {
@@ -106,6 +107,7 @@ export default function PointeusePage() {
           date: selectedDate,
           entryTime: local.entryTime || null,
           exitTime: local.exitTime || null,
+          excluded: local.excluded,
         }),
       });
 
@@ -133,8 +135,9 @@ export default function PointeusePage() {
   const monthKey = getMonthKey(new Date(selectedDate));
 
   const calculateDaySurplus = (employee: Employee, date: string): number => {
-    const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === date);
-    const worked = dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+    const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === date);
+    if (dayEntry?.excluded) return 0;
+    const worked = dayEntry ? calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime) : 0;
     const expected = employee.hoursPerWeek / 5;
     return worked - expected;
   };
@@ -142,16 +145,25 @@ export default function PointeusePage() {
   const calculateWeekSurplus = (employee: Employee, weekStartDate: string): number => {
     const weekStartObj = new Date(weekStartDate);
     let totalWorked = 0;
+    let excludedDays = 0;
 
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStartObj);
       d.setDate(d.getDate() + i);
       const dateStr = d.toISOString().split('T')[0];
-      const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === dateStr);
-      totalWorked += dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+      const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === dateStr);
+
+      if (dayEntry?.excluded) {
+        const dayOfWeek = d.getDay();
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) excludedDays++;
+      } else if (dayEntry) {
+        totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+      }
     }
 
-    return totalWorked - employee.hoursPerWeek;
+    const expectedDays = 5 - excludedDays;
+    const expected = (employee.hoursPerWeek / 5) * expectedDays;
+    return totalWorked - expected;
   };
 
   const calculateMonthSurplus = (employee: Employee, month: string): number => {
@@ -164,12 +176,17 @@ export default function PointeusePage() {
     for (let day = 1; day <= daysInMonth; day++) {
       const d = new Date(year, monthNum - 1, day);
       const dayOfWeek = d.getDay();
+      const dateStr = d.toISOString().split('T')[0];
+      const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === dateStr);
+
+      if (dayEntry?.excluded) continue;
+
       if (dayOfWeek !== 0 && dayOfWeek !== 6) {
         workDays++;
       }
-      const dateStr = d.toISOString().split('T')[0];
-      const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === dateStr);
-      totalWorked += dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+      if (dayEntry) {
+        totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+      }
     }
 
     const expectedMonthly = (employee.hoursPerWeek / 5) * workDays;
@@ -177,7 +194,7 @@ export default function PointeusePage() {
   };
 
   const calculateTotalSurplus = (employee: Employee): number => {
-    const employeeEntries = entries.filter(e => e.employeeId === employee.id);
+    const employeeEntries = entries.filter(e => e.employeeId === employee.id && !e.excluded);
     const totalWorked = employeeEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
     const dates = [...new Set(employeeEntries.map(e => e.date))];
     const expectedTotal = dates.length * (employee.hoursPerWeek / 5);
@@ -189,7 +206,7 @@ export default function PointeusePage() {
     let totalExpected = 0;
 
     employees.forEach(emp => {
-      const empEntries = entries.filter(e => e.employeeId === emp.id);
+      const empEntries = entries.filter(e => e.employeeId === emp.id && !e.excluded);
       totalWorked += empEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
       const days = new Set(empEntries.map(e => e.date)).size;
       totalExpected += days * (emp.hoursPerWeek / 5);
@@ -212,7 +229,6 @@ export default function PointeusePage() {
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#1A1A1A] pb-8">
-      {/* Header */}
       <header className="bg-[#1A1A1A] text-[#F5F0E6] p-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <h1 className="text-3xl font-black tracking-tight">POINTEUSE</h1>
@@ -228,7 +244,6 @@ export default function PointeusePage() {
       </header>
 
       <main className="max-w-6xl mx-auto p-6">
-        {/* Date Selector & Global Stats */}
         <section className="flex flex-col md:flex-row gap-6 mb-8">
           <div className="bg-[#2D5A9E] p-6 flex-1">
             <label className="block text-[#FFD23F] font-black mb-2 text-lg">DATE</label>
@@ -251,7 +266,6 @@ export default function PointeusePage() {
           </div>
         </section>
 
-        {/* Employees List */}
         {employees.length === 0 ? (
           <div className="bg-[#FFD23F] p-8 text-center border-4 border-[#1A1A1A]">
             <p className="text-2xl font-black mb-4">AUCUN EMPLOYE</p>
@@ -262,7 +276,7 @@ export default function PointeusePage() {
         ) : (
           <div className="space-y-6">
             {employees.map((employee, index) => {
-              const local = localEntries[employee.id] || { entryTime: '', exitTime: '', saved: true, saving: false };
+              const local = localEntries[employee.id] || { entryTime: '', exitTime: '', excluded: false, saved: true, saving: false };
               const worked = calculateWorkedHoursFromStrings(local.entryTime, local.exitTime);
               const daySurplus = calculateDaySurplus(employee, selectedDate);
               const weekSurplus = calculateWeekSurplus(employee, weekStart);
@@ -274,9 +288,8 @@ export default function PointeusePage() {
               return (
                 <div
                   key={employee.id}
-                  className="bg-white border-4 border-[#1A1A1A] overflow-hidden"
+                  className={`bg-white border-4 border-[#1A1A1A] overflow-hidden ${local.excluded ? 'opacity-50' : ''}`}
                 >
-                  {/* Employee Header */}
                   <div
                     className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
                     style={{ borderLeft: `8px solid ${accentColor}` }}
@@ -290,7 +303,6 @@ export default function PointeusePage() {
                       </p>
                     </Link>
 
-                    {/* Time Inputs */}
                     <div className="flex gap-3 flex-wrap items-end">
                       <div>
                         <label className="block text-sm font-bold text-[#666] mb-1">ENTREE</label>
@@ -298,7 +310,8 @@ export default function PointeusePage() {
                           type="time"
                           value={local.entryTime}
                           onChange={(e) => updateLocalEntry(employee.id, 'entryTime', e.target.value)}
-                          className="p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32"
+                          disabled={local.excluded}
+                          className={`p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32 ${local.excluded ? 'opacity-50' : ''}`}
                         />
                       </div>
                       <div>
@@ -307,15 +320,33 @@ export default function PointeusePage() {
                           type="time"
                           value={local.exitTime}
                           onChange={(e) => updateLocalEntry(employee.id, 'exitTime', e.target.value)}
-                          className="p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32"
+                          disabled={local.excluded}
+                          className={`p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32 ${local.excluded ? 'opacity-50' : ''}`}
                         />
                       </div>
                       <div className="text-center">
                         <label className="block text-sm font-bold text-[#666] mb-1">FAIT</label>
                         <p className="p-2 font-black text-lg bg-[#1A1A1A] text-[#F5F0E6] w-20">
-                          {formatHoursSimple(worked)}
+                          {local.excluded ? '-' : formatHoursSimple(worked)}
                         </p>
                       </div>
+
+                      {/* Checkbox Ne pas compter */}
+                      <label className="flex flex-col items-center cursor-pointer">
+                        <span className="text-sm font-bold text-[#666] mb-1">EXCLURE</span>
+                        <div className={`w-12 h-12 border-4 border-[#1A1A1A] flex items-center justify-center transition ${local.excluded ? 'bg-[#E63946]' : 'bg-[#F5F0E6]'}`}>
+                          <input
+                            type="checkbox"
+                            checked={local.excluded}
+                            onChange={(e) => updateLocalEntry(employee.id, 'excluded', e.target.checked)}
+                            className="sr-only"
+                          />
+                          {local.excluded && (
+                            <span className="text-white font-black text-xl">X</span>
+                          )}
+                        </div>
+                      </label>
+
                       <button
                         onClick={() => saveEntry(employee.id)}
                         disabled={local.saved || local.saving}
@@ -332,9 +363,8 @@ export default function PointeusePage() {
                     </div>
                   </div>
 
-                  {/* Stats Row */}
                   <div className="grid grid-cols-2 md:grid-cols-4 border-t-4 border-[#1A1A1A]">
-                    <StatBox label="JOUR" value={daySurplus} />
+                    <StatBox label="JOUR" value={daySurplus} excluded={local.excluded} />
                     <StatBox label="SEMAINE" value={weekSurplus} />
                     <StatBox label="MOIS" value={monthSurplus} />
                     <StatBox label="TOTAL" value={totalSurplus} highlight />
@@ -346,7 +376,6 @@ export default function PointeusePage() {
         )}
       </main>
 
-      {/* Footer Decoration */}
       <footer className="fixed bottom-0 left-0 right-0 h-2 flex">
         <div className="flex-1 bg-[#E63946]"></div>
         <div className="flex-1 bg-[#FFD23F]"></div>
@@ -356,7 +385,7 @@ export default function PointeusePage() {
   );
 }
 
-function StatBox({ label, value, highlight = false }: { label: string; value: number; highlight?: boolean }) {
+function StatBox({ label, value, highlight = false, excluded = false }: { label: string; value: number; highlight?: boolean; excluded?: boolean }) {
   const isPositive = value >= 0;
   const bgColor = highlight ? '#1A1A1A' : 'transparent';
 
@@ -370,9 +399,9 @@ function StatBox({ label, value, highlight = false }: { label: string; value: nu
       </p>
       <p
         className="text-xl font-black"
-        style={{ color: isPositive ? '#4CAF50' : '#E63946' }}
+        style={{ color: excluded ? '#888' : isPositive ? '#4CAF50' : '#E63946' }}
       >
-        {formatHours(value)}
+        {excluded ? '-' : formatHours(value)}
       </p>
     </div>
   );
