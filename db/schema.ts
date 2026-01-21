@@ -28,6 +28,9 @@ export const ABSENCE_TYPES = {
   rtt: { label: 'RTT', color: '#FFD23F' },
   teletravail: { label: 'Télétravail', color: '#4CAF50' },
   formation: { label: 'Formation', color: '#9C27B0' },
+  ferie: { label: 'Jour férié', color: '#1A1A1A' },
+  sans_solde: { label: 'Sans solde', color: '#FF9800' },
+  maternite: { label: 'Maternité/Paternité', color: '#E91E63' },
   autre: { label: 'Autre', color: '#888' },
 } as const;
 
