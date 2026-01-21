@@ -16,6 +16,13 @@ export function calculateWorkedHours(entry: TimeEntry): number {
   return Math.max(0, end - start);
 }
 
+export function calculateWorkedHoursFromStrings(entryTime: string | null, exitTime: string | null): number {
+  if (!entryTime || !exitTime) return 0;
+  const start = parseTime(entryTime);
+  const end = parseTime(exitTime);
+  return Math.max(0, end - start);
+}
+
 export function formatHours(hours: number): string {
   const h = Math.floor(Math.abs(hours));
   const m = Math.round((Math.abs(hours) - h) * 60);

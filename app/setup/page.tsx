@@ -1,41 +1,91 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useLocalStorage } from '@/lib/useLocalStorage';
-import { Employee } from '@/lib/types';
-import { generateId } from '@/lib/utils';
+
+interface Employee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  position: string | null;
+  hoursPerWeek: number;
+}
 
 export default function SetupPage() {
-  const [employees, setEmployees] = useLocalStorage<Employee[]>('pointeuse-employees', []);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [position, setPosition] = useState('');
   const [hoursPerWeek, setHoursPerWeek] = useState('35');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const fetchEmployees = useCallback(async () => {
+    try {
+      const res = await fetch('/api/employees');
+      const data = await res.json();
+      setEmployees(data);
+    } catch (error) {
+      console.error('Error fetching employees:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchEmployees();
+  }, [fetchEmployees]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!firstName.trim() || !lastName.trim()) return;
 
-    const newEmployee: Employee = {
-      id: generateId(),
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      position: position.trim(),
-      hoursPerWeek: parseFloat(hoursPerWeek) || 35,
-      createdAt: new Date().toISOString(),
-    };
+    setSaving(true);
+    try {
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          position: position.trim() || null,
+          hoursPerWeek: parseFloat(hoursPerWeek) || 35,
+        }),
+      });
 
-    setEmployees([...employees, newEmployee]);
-    setFirstName('');
-    setLastName('');
-    setPosition('');
-    setHoursPerWeek('35');
+      if (res.ok) {
+        const newEmployee = await res.json();
+        setEmployees([newEmployee, ...employees]);
+        setFirstName('');
+        setLastName('');
+        setPosition('');
+        setHoursPerWeek('35');
+      }
+    } catch (error) {
+      console.error('Error creating employee:', error);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDelete = (id: string) => {
-    setEmployees(employees.filter(e => e.id !== id));
+  const handleDelete = async (id: string) => {
+    try {
+      const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setEmployees(employees.filter(e => e.id !== id));
+      }
+    } catch (error) {
+      console.error('Error deleting employee:', error);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#F5F0E6] flex items-center justify-center">
+        <div className="text-2xl font-black">CHARGEMENT...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#1A1A1A]">
@@ -67,6 +117,7 @@ export default function SetupPage() {
                 onChange={(e) => setFirstName(e.target.value)}
                 className="w-full p-3 bg-[#F5F0E6] text-[#1A1A1A] font-medium border-4 border-[#1A1A1A] focus:border-[#FFD23F] outline-none"
                 required
+                disabled={saving}
               />
             </div>
             <div>
@@ -77,6 +128,7 @@ export default function SetupPage() {
                 onChange={(e) => setLastName(e.target.value)}
                 className="w-full p-3 bg-[#F5F0E6] text-[#1A1A1A] font-medium border-4 border-[#1A1A1A] focus:border-[#FFD23F] outline-none"
                 required
+                disabled={saving}
               />
             </div>
             <div>
@@ -86,6 +138,7 @@ export default function SetupPage() {
                 value={position}
                 onChange={(e) => setPosition(e.target.value)}
                 className="w-full p-3 bg-[#F5F0E6] text-[#1A1A1A] font-medium border-4 border-[#1A1A1A] focus:border-[#FFD23F] outline-none"
+                disabled={saving}
               />
             </div>
             <div>
@@ -99,14 +152,20 @@ export default function SetupPage() {
                 max="60"
                 step="0.5"
                 required
+                disabled={saving}
               />
             </div>
             <div className="md:col-span-2">
               <button
                 type="submit"
-                className="w-full p-4 bg-[#FFD23F] text-[#1A1A1A] font-black text-xl hover:bg-[#E6BD38] transition border-4 border-[#1A1A1A]"
+                disabled={saving}
+                className={`w-full p-4 font-black text-xl transition border-4 border-[#1A1A1A] ${
+                  saving
+                    ? 'bg-[#888] text-white cursor-wait'
+                    : 'bg-[#FFD23F] text-[#1A1A1A] hover:bg-[#E6BD38]'
+                }`}
               >
-                + AJOUTER
+                {saving ? 'ENREGISTREMENT...' : '+ AJOUTER'}
               </button>
             </div>
           </form>
@@ -135,14 +194,14 @@ export default function SetupPage() {
                     borderLeftWidth: '8px',
                   }}
                 >
-                  <div className="flex-1">
+                  <Link href={`/employe/${employee.id}`} className="flex-1 hover:opacity-80 transition">
                     <h3 className="text-xl font-black">
                       {employee.firstName} {employee.lastName}
                     </h3>
                     <p className="text-[#666] font-medium">
                       {employee.position || 'Pas de poste'} — {employee.hoursPerWeek}h/semaine
                     </p>
-                  </div>
+                  </Link>
                   <button
                     onClick={() => handleDelete(employee.id)}
                     className="p-3 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition"

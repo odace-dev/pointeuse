@@ -1,62 +1,188 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { useLocalStorage } from '@/lib/useLocalStorage';
-import { Employee, TimeEntry } from '@/lib/types';
 import {
-  generateId,
-  calculateWorkedHours,
+  calculateWorkedHoursFromStrings,
   formatHours,
   formatHoursSimple,
-  calculateDaySurplus,
-  calculateWeekSurplus,
-  calculateMonthSurplus,
-  calculateTotalSurplus,
   getTodayDate,
   getWeekStart,
   getMonthKey,
 } from '@/lib/utils';
 
-export default function PointeusePage() {
-  const [employees] = useLocalStorage<Employee[]>('pointeuse-employees', []);
-  const [entries, setEntries] = useLocalStorage<TimeEntry[]>('pointeuse-entries', []);
-  const [selectedDate, setSelectedDate] = useState(getTodayDate());
+interface Employee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  position: string | null;
+  hoursPerWeek: number;
+}
 
-  const todayEntries = useMemo(() => {
-    return employees.map(emp => {
+interface TimeEntry {
+  id: string;
+  employeeId: string;
+  date: string;
+  entryTime: string | null;
+  exitTime: string | null;
+}
+
+interface LocalEntry {
+  entryTime: string;
+  exitTime: string;
+  saved: boolean;
+  saving: boolean;
+}
+
+export default function PointeusePage() {
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [entries, setEntries] = useState<TimeEntry[]>([]);
+  const [selectedDate, setSelectedDate] = useState(getTodayDate());
+  const [loading, setLoading] = useState(true);
+  const [localEntries, setLocalEntries] = useState<Record<string, LocalEntry>>({});
+
+  // Fetch employees and entries
+  const fetchData = useCallback(async () => {
+    try {
+      const [empRes, entRes] = await Promise.all([
+        fetch('/api/employees'),
+        fetch('/api/entries'),
+      ]);
+      const [empData, entData] = await Promise.all([empRes.json(), entRes.json()]);
+      setEmployees(empData);
+      setEntries(entData);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Initialize local entries when date or entries change
+  useEffect(() => {
+    const newLocalEntries: Record<string, LocalEntry> = {};
+    employees.forEach(emp => {
       const existing = entries.find(e => e.employeeId === emp.id && e.date === selectedDate);
-      return existing || {
-        id: generateId(),
-        employeeId: emp.id,
-        date: selectedDate,
-        entryTime: null,
-        exitTime: null,
+      newLocalEntries[emp.id] = {
+        entryTime: existing?.entryTime || '',
+        exitTime: existing?.exitTime || '',
+        saved: true,
+        saving: false,
       };
     });
+    setLocalEntries(newLocalEntries);
   }, [employees, entries, selectedDate]);
 
-  const updateEntry = (employeeId: string, field: 'entryTime' | 'exitTime', value: string) => {
-    const existingIndex = entries.findIndex(e => e.employeeId === employeeId && e.date === selectedDate);
+  const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime', value: string) => {
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: {
+        ...prev[employeeId],
+        [field]: value,
+        saved: false,
+      },
+    }));
+  };
 
-    if (existingIndex >= 0) {
-      const updated = [...entries];
-      updated[existingIndex] = { ...updated[existingIndex], [field]: value || null };
-      setEntries(updated);
-    } else {
-      const newEntry: TimeEntry = {
-        id: generateId(),
-        employeeId,
-        date: selectedDate,
-        entryTime: field === 'entryTime' ? value || null : null,
-        exitTime: field === 'exitTime' ? value || null : null,
-      };
-      setEntries([...entries, newEntry]);
+  const saveEntry = async (employeeId: string) => {
+    const local = localEntries[employeeId];
+    if (!local) return;
+
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: { ...prev[employeeId], saving: true },
+    }));
+
+    try {
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId,
+          date: selectedDate,
+          entryTime: local.entryTime || null,
+          exitTime: local.exitTime || null,
+        }),
+      });
+
+      if (res.ok) {
+        const savedEntry = await res.json();
+        setEntries(prev => {
+          const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
+          return [...filtered, savedEntry];
+        });
+        setLocalEntries(prev => ({
+          ...prev,
+          [employeeId]: { ...prev[employeeId], saved: true, saving: false },
+        }));
+      }
+    } catch (error) {
+      console.error('Error saving entry:', error);
+      setLocalEntries(prev => ({
+        ...prev,
+        [employeeId]: { ...prev[employeeId], saving: false },
+      }));
     }
   };
 
   const weekStart = getWeekStart(new Date(selectedDate));
   const monthKey = getMonthKey(new Date(selectedDate));
+
+  const calculateDaySurplus = (employee: Employee, date: string): number => {
+    const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === date);
+    const worked = dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+    const expected = employee.hoursPerWeek / 5;
+    return worked - expected;
+  };
+
+  const calculateWeekSurplus = (employee: Employee, weekStartDate: string): number => {
+    const weekStartObj = new Date(weekStartDate);
+    let totalWorked = 0;
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStartObj);
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === dateStr);
+      totalWorked += dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+    }
+
+    return totalWorked - employee.hoursPerWeek;
+  };
+
+  const calculateMonthSurplus = (employee: Employee, month: string): number => {
+    const [year, monthNum] = month.split('-').map(Number);
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
+
+    let totalWorked = 0;
+    let workDays = 0;
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(year, monthNum - 1, day);
+      const dayOfWeek = d.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        workDays++;
+      }
+      const dateStr = d.toISOString().split('T')[0];
+      const dayEntries = entries.filter(e => e.employeeId === employee.id && e.date === dateStr);
+      totalWorked += dayEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+    }
+
+    const expectedMonthly = (employee.hoursPerWeek / 5) * workDays;
+    return totalWorked - expectedMonthly;
+  };
+
+  const calculateTotalSurplus = (employee: Employee): number => {
+    const employeeEntries = entries.filter(e => e.employeeId === employee.id);
+    const totalWorked = employeeEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
+    const dates = [...new Set(employeeEntries.map(e => e.date))];
+    const expectedTotal = dates.length * (employee.hoursPerWeek / 5);
+    return totalWorked - expectedTotal;
+  };
 
   const globalStats = useMemo(() => {
     let totalWorked = 0;
@@ -64,7 +190,7 @@ export default function PointeusePage() {
 
     employees.forEach(emp => {
       const empEntries = entries.filter(e => e.employeeId === emp.id);
-      totalWorked += empEntries.reduce((sum, e) => sum + calculateWorkedHours(e), 0);
+      totalWorked += empEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
       const days = new Set(empEntries.map(e => e.date)).size;
       totalExpected += days * (emp.hoursPerWeek / 5);
     });
@@ -75,6 +201,14 @@ export default function PointeusePage() {
       surplus: totalWorked - totalExpected,
     };
   }, [employees, entries]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#F5F0E6] flex items-center justify-center">
+        <div className="text-2xl font-black">CHARGEMENT...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#1A1A1A] pb-8">
@@ -128,12 +262,12 @@ export default function PointeusePage() {
         ) : (
           <div className="space-y-6">
             {employees.map((employee, index) => {
-              const entry = todayEntries.find(e => e.employeeId === employee.id);
-              const worked = entry ? calculateWorkedHours(entry) : 0;
-              const daySurplus = calculateDaySurplus(employee, entries, selectedDate);
-              const weekSurplus = calculateWeekSurplus(employee, entries, weekStart);
-              const monthSurplus = calculateMonthSurplus(employee, entries, monthKey);
-              const totalSurplus = calculateTotalSurplus(employee, entries);
+              const local = localEntries[employee.id] || { entryTime: '', exitTime: '', saved: true, saving: false };
+              const worked = calculateWorkedHoursFromStrings(local.entryTime, local.exitTime);
+              const daySurplus = calculateDaySurplus(employee, selectedDate);
+              const weekSurplus = calculateWeekSurplus(employee, weekStart);
+              const monthSurplus = calculateMonthSurplus(employee, monthKey);
+              const totalSurplus = calculateTotalSurplus(employee);
 
               const accentColor = index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F';
 
@@ -147,23 +281,23 @@ export default function PointeusePage() {
                     className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
                     style={{ borderLeft: `8px solid ${accentColor}` }}
                   >
-                    <div>
+                    <Link href={`/employe/${employee.id}`} className="hover:opacity-80 transition">
                       <h3 className="text-2xl font-black">
                         {employee.firstName} {employee.lastName}
                       </h3>
                       <p className="text-[#666] font-medium">
                         {employee.position || 'Employe'} — {employee.hoursPerWeek}h/sem
                       </p>
-                    </div>
+                    </Link>
 
                     {/* Time Inputs */}
-                    <div className="flex gap-4 flex-wrap">
+                    <div className="flex gap-3 flex-wrap items-end">
                       <div>
                         <label className="block text-sm font-bold text-[#666] mb-1">ENTREE</label>
                         <input
                           type="time"
-                          value={entry?.entryTime || ''}
-                          onChange={(e) => updateEntry(employee.id, 'entryTime', e.target.value)}
+                          value={local.entryTime}
+                          onChange={(e) => updateLocalEntry(employee.id, 'entryTime', e.target.value)}
                           className="p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32"
                         />
                       </div>
@@ -171,8 +305,8 @@ export default function PointeusePage() {
                         <label className="block text-sm font-bold text-[#666] mb-1">SORTIE</label>
                         <input
                           type="time"
-                          value={entry?.exitTime || ''}
-                          onChange={(e) => updateEntry(employee.id, 'exitTime', e.target.value)}
+                          value={local.exitTime}
+                          onChange={(e) => updateLocalEntry(employee.id, 'exitTime', e.target.value)}
                           className="p-2 bg-[#F5F0E6] border-4 border-[#1A1A1A] font-bold text-lg w-32"
                         />
                       </div>
@@ -182,6 +316,19 @@ export default function PointeusePage() {
                           {formatHoursSimple(worked)}
                         </p>
                       </div>
+                      <button
+                        onClick={() => saveEntry(employee.id)}
+                        disabled={local.saved || local.saving}
+                        className={`p-2 px-4 font-bold text-lg border-4 border-[#1A1A1A] transition h-[52px] ${
+                          local.saved
+                            ? 'bg-[#4CAF50] text-white cursor-default'
+                            : local.saving
+                            ? 'bg-[#888] text-white cursor-wait'
+                            : 'bg-[#FFD23F] text-[#1A1A1A] hover:bg-[#E6BD38] cursor-pointer'
+                        }`}
+                      >
+                        {local.saving ? '...' : local.saved ? 'OK' : 'ENREGISTRER'}
+                      </button>
                     </div>
                   </div>
 
