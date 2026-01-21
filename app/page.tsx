@@ -36,6 +36,22 @@ interface LocalEntry {
   saving: boolean;
 }
 
+// Helper to normalize date to YYYY-MM-DD format
+function normalizeDate(dateInput: string | Date): string {
+  if (typeof dateInput === 'string') {
+    if (dateInput.includes('T')) {
+      return dateInput.split('T')[0];
+    }
+    return dateInput;
+  }
+  return dateInput.toISOString().split('T')[0];
+}
+
+// Helper to format date for local comparison (avoiding timezone issues)
+function formatLocalDate(year: number, month: number, day: number): string {
+  return `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+}
+
 export default function PointeusePage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
@@ -51,7 +67,12 @@ export default function PointeusePage() {
       ]);
       const [empData, entData] = await Promise.all([empRes.json(), entRes.json()]);
       setEmployees(empData);
-      setEntries(entData);
+      // Normalize dates in entries
+      const normalizedEntries = entData.map((e: TimeEntry) => ({
+        ...e,
+        date: normalizeDate(e.date),
+      }));
+      setEntries(normalizedEntries);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -115,7 +136,7 @@ export default function PointeusePage() {
         const savedEntry = await res.json();
         setEntries(prev => {
           const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
-          return [...filtered, savedEntry];
+          return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
         });
         setLocalEntries(prev => ({
           ...prev,
@@ -136,8 +157,9 @@ export default function PointeusePage() {
 
   const calculateDaySurplus = (employee: Employee, date: string): number => {
     const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === date);
-    if (dayEntry?.excluded) return 0;
-    const worked = dayEntry ? calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime) : 0;
+    if (!dayEntry || dayEntry.excluded) return 0;
+    if (!dayEntry.entryTime || !dayEntry.exitTime) return -(employee.hoursPerWeek / 5);
+    const worked = calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
     const expected = employee.hoursPerWeek / 5;
     return worked - expected;
   };
@@ -145,59 +167,69 @@ export default function PointeusePage() {
   const calculateWeekSurplus = (employee: Employee, weekStartDate: string): number => {
     const weekStartObj = new Date(weekStartDate);
     let totalWorked = 0;
-    let excludedDays = 0;
+    let daysWithEntry = 0;
+    const dailyHours = employee.hoursPerWeek / 5;
 
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStartObj);
       d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = formatLocalDate(d.getFullYear(), d.getMonth(), d.getDate());
       const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === dateStr);
+      const dayOfWeek = d.getDay();
 
-      if (dayEntry?.excluded) {
-        const dayOfWeek = d.getDay();
-        if (dayOfWeek !== 0 && dayOfWeek !== 6) excludedDays++;
-      } else if (dayEntry) {
-        totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Weekday
+        if (dayEntry?.excluded) {
+          continue; // Skip excluded days
+        }
+        if (dayEntry && dayEntry.entryTime && dayEntry.exitTime) {
+          totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+          daysWithEntry++;
+        }
       }
     }
 
-    const expectedDays = 5 - excludedDays;
-    const expected = (employee.hoursPerWeek / 5) * expectedDays;
+    const expected = daysWithEntry * dailyHours;
     return totalWorked - expected;
   };
 
   const calculateMonthSurplus = (employee: Employee, month: string): number => {
     const [year, monthNum] = month.split('-').map(Number);
     const daysInMonth = new Date(year, monthNum, 0).getDate();
+    const dailyHours = employee.hoursPerWeek / 5;
 
     let totalWorked = 0;
-    let workDays = 0;
+    let daysWithEntry = 0;
 
     for (let day = 1; day <= daysInMonth; day++) {
       const d = new Date(year, monthNum - 1, day);
       const dayOfWeek = d.getDay();
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = formatLocalDate(year, monthNum - 1, day);
       const dayEntry = entries.find(e => e.employeeId === employee.id && e.date === dateStr);
 
-      if (dayEntry?.excluded) continue;
-
-      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-        workDays++;
-      }
-      if (dayEntry) {
-        totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Weekday
+        if (dayEntry?.excluded) {
+          continue; // Skip excluded days
+        }
+        if (dayEntry && dayEntry.entryTime && dayEntry.exitTime) {
+          totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+          daysWithEntry++;
+        }
       }
     }
 
-    const expectedMonthly = (employee.hoursPerWeek / 5) * workDays;
+    const expectedMonthly = daysWithEntry * dailyHours;
     return totalWorked - expectedMonthly;
   };
 
   const calculateTotalSurplus = (employee: Employee): number => {
-    const employeeEntries = entries.filter(e => e.employeeId === employee.id && !e.excluded);
-    const totalWorked = employeeEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
-    const dates = [...new Set(employeeEntries.map(e => e.date))];
-    const expectedTotal = dates.length * (employee.hoursPerWeek / 5);
+    const employeeEntries = entries.filter(
+      e => e.employeeId === employee.id && !e.excluded && e.entryTime && e.exitTime
+    );
+    const totalWorked = employeeEntries.reduce(
+      (sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0
+    );
+    const daysWorked = employeeEntries.length;
+    const expectedTotal = daysWorked * (employee.hoursPerWeek / 5);
     return totalWorked - expectedTotal;
   };
 
@@ -206,10 +238,14 @@ export default function PointeusePage() {
     let totalExpected = 0;
 
     employees.forEach(emp => {
-      const empEntries = entries.filter(e => e.employeeId === emp.id && !e.excluded);
-      totalWorked += empEntries.reduce((sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
-      const days = new Set(empEntries.map(e => e.date)).size;
-      totalExpected += days * (emp.hoursPerWeek / 5);
+      const empEntries = entries.filter(
+        e => e.employeeId === emp.id && !e.excluded && e.entryTime && e.exitTime
+      );
+      totalWorked += empEntries.reduce(
+        (sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0
+      );
+      const daysWorked = empEntries.length;
+      totalExpected += daysWorked * (emp.hoursPerWeek / 5);
     });
 
     return {
@@ -236,6 +272,9 @@ export default function PointeusePage() {
             <span className="px-4 py-2 bg-[#E63946] text-white font-bold">
               POINTER
             </span>
+            <Link href="/dashboard" className="px-4 py-2 bg-[#2D5A9E] text-white font-bold hover:bg-[#24487E] transition">
+              DASHBOARD
+            </Link>
             <Link href="/setup" className="px-4 py-2 bg-[#F5F0E6] text-[#1A1A1A] font-bold hover:bg-[#FFD23F] transition">
               SETUP
             </Link>
