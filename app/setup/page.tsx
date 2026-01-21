@@ -20,6 +20,14 @@ export default function SetupPage() {
   const [position, setPosition] = useState('');
   const [hoursPerWeek, setHoursPerWeek] = useState('35');
 
+  // Edit modal state
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editPosition, setEditPosition] = useState('');
+  const [editHoursPerWeek, setEditHoursPerWeek] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
   const fetchEmployees = useCallback(async () => {
     try {
       const res = await fetch('/api/employees');
@@ -69,6 +77,8 @@ export default function SetupPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!confirm('Supprimer cet employe et toutes ses donnees ?')) return;
+
     try {
       const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -76,6 +86,51 @@ export default function SetupPage() {
       }
     } catch (error) {
       console.error('Error deleting employee:', error);
+    }
+  };
+
+  const openEditModal = (employee: Employee) => {
+    setEditingEmployee(employee);
+    setEditFirstName(employee.firstName);
+    setEditLastName(employee.lastName);
+    setEditPosition(employee.position || '');
+    setEditHoursPerWeek(employee.hoursPerWeek.toString());
+  };
+
+  const closeEditModal = () => {
+    setEditingEmployee(null);
+    setEditFirstName('');
+    setEditLastName('');
+    setEditPosition('');
+    setEditHoursPerWeek('');
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEmployee || !editFirstName.trim() || !editLastName.trim()) return;
+
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/employees/${editingEmployee.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: editFirstName.trim(),
+          lastName: editLastName.trim(),
+          position: editPosition.trim() || null,
+          hoursPerWeek: parseFloat(editHoursPerWeek) || 35,
+        }),
+      });
+
+      if (res.ok) {
+        const updatedEmployee = await res.json();
+        setEmployees(employees.map(e => e.id === updatedEmployee.id ? updatedEmployee : e));
+        closeEditModal();
+      }
+    } catch (error) {
+      console.error('Error updating employee:', error);
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -96,6 +151,9 @@ export default function SetupPage() {
           <nav className="flex gap-4">
             <Link href="/" className="px-4 py-2 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition">
               POINTER
+            </Link>
+            <Link href="/dashboard" className="px-4 py-2 bg-[#2D5A9E] text-white font-bold hover:bg-[#24487E] transition">
+              DASHBOARD
             </Link>
             <span className="px-4 py-2 bg-[#F5F0E6] text-[#1A1A1A] font-bold">
               SETUP
@@ -188,7 +246,7 @@ export default function SetupPage() {
               {employees.map((employee, index) => (
                 <div
                   key={employee.id}
-                  className="bg-white p-4 border-4 border-[#1A1A1A] flex items-center justify-between"
+                  className="bg-white p-4 border-4 border-[#1A1A1A] flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
                   style={{
                     borderLeftColor: index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F',
                     borderLeftWidth: '8px',
@@ -199,21 +257,104 @@ export default function SetupPage() {
                       {employee.firstName} {employee.lastName}
                     </h3>
                     <p className="text-[#666] font-medium">
-                      {employee.position || 'Pas de poste'} — {employee.hoursPerWeek}h/semaine
+                      {employee.position || 'Pas de poste'} — <span className="text-[#2D5A9E] font-bold">{employee.hoursPerWeek}h/semaine</span>
                     </p>
                   </Link>
-                  <button
-                    onClick={() => handleDelete(employee.id)}
-                    className="p-3 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition"
-                  >
-                    SUPPRIMER
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openEditModal(employee)}
+                      className="p-3 bg-[#2D5A9E] text-white font-bold hover:bg-[#24487E] transition"
+                    >
+                      MODIFIER
+                    </button>
+                    <button
+                      onClick={() => handleDelete(employee.id)}
+                      className="p-3 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition"
+                    >
+                      SUPPRIMER
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </section>
       </main>
+
+      {/* Edit Modal */}
+      {editingEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#F5F0E6] border-4 border-[#1A1A1A] p-6 w-full max-w-md">
+            <h2 className="text-2xl font-black mb-6">MODIFIER EMPLOYE</h2>
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div>
+                <label className="block font-bold mb-2">PRENOM</label>
+                <input
+                  type="text"
+                  value={editFirstName}
+                  onChange={(e) => setEditFirstName(e.target.value)}
+                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                  required
+                  disabled={editSaving}
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-2">NOM</label>
+                <input
+                  type="text"
+                  value={editLastName}
+                  onChange={(e) => setEditLastName(e.target.value)}
+                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                  required
+                  disabled={editSaving}
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-2">POSTE</label>
+                <input
+                  type="text"
+                  value={editPosition}
+                  onChange={(e) => setEditPosition(e.target.value)}
+                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                  disabled={editSaving}
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-2">HEURES/SEMAINE</label>
+                <input
+                  type="number"
+                  value={editHoursPerWeek}
+                  onChange={(e) => setEditHoursPerWeek(e.target.value)}
+                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                  min="1"
+                  max="60"
+                  step="0.5"
+                  required
+                  disabled={editSaving}
+                />
+                <p className="text-sm text-[#666] mt-1">Heures attendues par semaine pour cet employe</p>
+              </div>
+              <div className="flex gap-4 pt-4">
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="flex-1 p-3 bg-[#888] text-white font-bold hover:bg-[#666] transition"
+                  disabled={editSaving}
+                >
+                  ANNULER
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 p-3 bg-[#4CAF50] text-white font-bold hover:bg-[#3D8B40] transition"
+                  disabled={editSaving}
+                >
+                  {editSaving ? 'ENREGISTREMENT...' : 'ENREGISTRER'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Footer Decoration */}
       <footer className="fixed bottom-0 left-0 right-0 h-2 flex">

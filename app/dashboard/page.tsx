@@ -32,9 +32,9 @@ interface EmployeeStats {
   employee: Employee;
   weekSurplus: number;
   monthSurplus: number;
-  totalSurplus: number;
-  totalWorked: number;
-  daysWorked: number;
+  periodSurplus: number;
+  periodWorked: number;
+  periodDaysWorked: number;
   absenceDays: number;
 }
 
@@ -42,6 +42,23 @@ const MONTHS_FR = [
   'Janvier', 'Fevrier', 'Mars', 'Avril', 'Mai', 'Juin',
   'Juillet', 'Aout', 'Septembre', 'Octobre', 'Novembre', 'Decembre'
 ];
+
+// Helper to normalize date to YYYY-MM-DD format
+function normalizeDate(dateInput: string | Date): string {
+  if (typeof dateInput === 'string') {
+    // If it's an ISO string with time, extract just the date part
+    if (dateInput.includes('T')) {
+      return dateInput.split('T')[0];
+    }
+    return dateInput;
+  }
+  return dateInput.toISOString().split('T')[0];
+}
+
+// Helper to format date for local comparison (avoiding timezone issues)
+function formatLocalDate(year: number, month: number, day: number): string {
+  return `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+}
 
 export default function DashboardPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -52,6 +69,15 @@ export default function DashboardPage() {
     return { year: now.getFullYear(), month: now.getMonth() };
   });
 
+  // Period filter for global stats
+  const [periodStart, setPeriodStart] = useState(() => {
+    return '2024-11-01'; // Default to November 2024
+  });
+  const [periodEnd, setPeriodEnd] = useState(() => {
+    const now = new Date();
+    return formatLocalDate(now.getFullYear(), now.getMonth(), now.getDate());
+  });
+
   const fetchData = useCallback(async () => {
     try {
       const [empRes, entRes] = await Promise.all([
@@ -60,7 +86,12 @@ export default function DashboardPage() {
       ]);
       const [empData, entData] = await Promise.all([empRes.json(), entRes.json()]);
       setEmployees(empData);
-      setEntries(entData);
+      // Normalize dates in entries
+      const normalizedEntries = entData.map((e: TimeEntry) => ({
+        ...e,
+        date: normalizeDate(e.date),
+      }));
+      setEntries(normalizedEntries);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -73,63 +104,81 @@ export default function DashboardPage() {
   }, [fetchData]);
 
   const weekStart = getWeekStart(new Date());
-  const monthKey = `${currentMonth.year}-${(currentMonth.month + 1).toString().padStart(2, '0')}`;
 
   const employeeStats: EmployeeStats[] = useMemo(() => {
     return employees.map(emp => {
       const empEntries = entries.filter(e => e.employeeId === emp.id);
-      const nonExcludedEntries = empEntries.filter(e => !e.excluded || e.absenceType === 'teletravail');
+      const dailyHours = emp.hoursPerWeek / 5;
 
-      // Week surplus
-      const weekStartObj = new Date(weekStart);
+      // Week surplus - only count days with entries
+      const weekStartDate = new Date(weekStart);
       let weekWorked = 0;
+      let weekDaysWithEntry = 0;
       let weekExcludedDays = 0;
+
       for (let i = 0; i < 7; i++) {
-        const d = new Date(weekStartObj);
+        const d = new Date(weekStartDate);
         d.setDate(d.getDate() + i);
-        const dateStr = d.toISOString().split('T')[0];
+        const dateStr = formatLocalDate(d.getFullYear(), d.getMonth(), d.getDate());
         const dayEntry = empEntries.find(e => e.date === dateStr);
         const dayOfWeek = d.getDay();
 
-        if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') {
-          if (dayOfWeek !== 0 && dayOfWeek !== 6) weekExcludedDays++;
-        } else if (dayEntry) {
-          weekWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Weekday
+          if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') {
+            weekExcludedDays++;
+          } else if (dayEntry && dayEntry.entryTime && dayEntry.exitTime) {
+            weekWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+            weekDaysWithEntry++;
+          }
         }
       }
-      const weekExpected = (emp.hoursPerWeek / 5) * (5 - weekExcludedDays);
+      // Expected based on days with entries only
+      const weekExpected = weekDaysWithEntry * dailyHours;
       const weekSurplus = weekWorked - weekExpected;
 
       // Month surplus
-      const [year, monthNum] = monthKey.split('-').map(Number);
-      const daysInMonth = new Date(year, monthNum, 0).getDate();
+      const year = currentMonth.year;
+      const month = currentMonth.month;
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
       let monthWorked = 0;
-      let monthWorkDays = 0;
+      let monthDaysWithEntry = 0;
 
       for (let day = 1; day <= daysInMonth; day++) {
-        const d = new Date(year, monthNum - 1, day);
+        const dateStr = formatLocalDate(year, month, day);
+        const d = new Date(year, month, day);
         const dayOfWeek = d.getDay();
-        const dateStr = d.toISOString().split('T')[0];
         const dayEntry = empEntries.find(e => e.date === dateStr);
 
-        if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') continue;
-
-        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-          monthWorkDays++;
-        }
-        if (dayEntry) {
-          monthWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Weekday
+          if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') {
+            continue; // Skip excluded days
+          }
+          if (dayEntry && dayEntry.entryTime && dayEntry.exitTime) {
+            monthWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+            monthDaysWithEntry++;
+          }
         }
       }
-      const monthExpected = (emp.hoursPerWeek / 5) * monthWorkDays;
+      const monthExpected = monthDaysWithEntry * dailyHours;
       const monthSurplus = monthWorked - monthExpected;
 
-      // Total
-      const totalWorked = nonExcludedEntries.reduce((sum, e) =>
-        sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0);
-      const daysWorked = new Set(nonExcludedEntries.filter(e => e.entryTime && e.exitTime).map(e => e.date)).size;
-      const expectedTotal = daysWorked * (emp.hoursPerWeek / 5);
-      const totalSurplus = totalWorked - expectedTotal;
+      // Period surplus (filtered by date range)
+      const periodEntries = empEntries.filter(e => {
+        const entryDate = e.date;
+        return entryDate >= periodStart && entryDate <= periodEnd;
+      });
+
+      const nonExcludedPeriodEntries = periodEntries.filter(
+        e => (!e.excluded || e.absenceType === 'teletravail') && e.entryTime && e.exitTime
+      );
+
+      const periodWorked = nonExcludedPeriodEntries.reduce(
+        (sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime),
+        0
+      );
+      const periodDaysWorked = nonExcludedPeriodEntries.length;
+      const periodExpected = periodDaysWorked * dailyHours;
+      const periodSurplus = periodWorked - periodExpected;
 
       const absenceDays = empEntries.filter(e => e.excluded && e.absenceType !== 'teletravail').length;
 
@@ -137,37 +186,37 @@ export default function DashboardPage() {
         employee: emp,
         weekSurplus,
         monthSurplus,
-        totalSurplus,
-        totalWorked,
-        daysWorked,
+        periodSurplus,
+        periodWorked,
+        periodDaysWorked,
         absenceDays,
       };
     });
-  }, [employees, entries, weekStart, monthKey]);
+  }, [employees, entries, weekStart, currentMonth, periodStart, periodEnd]);
 
   // Sorted by most surplus
-  const sortedStats = [...employeeStats].sort((a, b) => b.totalSurplus - a.totalSurplus);
+  const sortedStats = [...employeeStats].sort((a, b) => b.periodSurplus - a.periodSurplus);
 
   // Alerts: employees with > 5h surplus this week
   const weekAlerts = employeeStats.filter(s => s.weekSurplus > 5);
 
   const globalStats = useMemo(() => {
-    const totalSurplus = employeeStats.reduce((sum, s) => sum + s.totalSurplus, 0);
-    const totalWorked = employeeStats.reduce((sum, s) => sum + s.totalWorked, 0);
+    const totalSurplus = employeeStats.reduce((sum, s) => sum + s.periodSurplus, 0);
+    const totalWorked = employeeStats.reduce((sum, s) => sum + s.periodWorked, 0);
     return { totalSurplus, totalWorked };
   }, [employeeStats]);
 
   const exportCSV = () => {
-    const headers = ['Employe', 'Poste', 'Heures/sem', 'Surplus Semaine', 'Surplus Mois', 'Surplus Total', 'Heures Travaillees', 'Jours Travailles', 'Jours Absence'];
+    const headers = ['Employe', 'Poste', 'Heures/sem', 'Surplus Semaine', 'Surplus Mois', 'Surplus Periode', 'Heures Travaillees', 'Jours Travailles', 'Jours Absence'];
     const rows = sortedStats.map(s => [
       `${s.employee.firstName} ${s.employee.lastName}`,
       s.employee.position || '',
       s.employee.hoursPerWeek,
       s.weekSurplus.toFixed(2),
       s.monthSurplus.toFixed(2),
-      s.totalSurplus.toFixed(2),
-      s.totalWorked.toFixed(2),
-      s.daysWorked,
+      s.periodSurplus.toFixed(2),
+      s.periodWorked.toFixed(2),
+      s.periodDaysWorked,
       s.absenceDays,
     ]);
 
@@ -176,7 +225,7 @@ export default function DashboardPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pointeuse-export-${monthKey}.csv`;
+    a.download = `pointeuse-export-${periodStart}-${periodEnd}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -186,7 +235,10 @@ export default function DashboardPage() {
     const rows: string[][] = [];
 
     employees.forEach(emp => {
-      const empEntries = entries.filter(e => e.employeeId === emp.id);
+      const empEntries = entries
+        .filter(e => e.employeeId === emp.id && e.date >= periodStart && e.date <= periodEnd)
+        .sort((a, b) => a.date.localeCompare(b.date));
+
       empEntries.forEach(entry => {
         const worked = calculateWorkedHoursFromStrings(entry.entryTime, entry.exitTime);
         rows.push([
@@ -206,7 +258,7 @@ export default function DashboardPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pointeuse-detail-${monthKey}.csv`;
+    a.download = `pointeuse-detail-${periodStart}-${periodEnd}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -272,27 +324,64 @@ export default function DashboardPage() {
           </section>
         )}
 
+        {/* Period Filter */}
+        <section className="bg-[#1A1A1A] p-4 mb-6 border-4 border-[#1A1A1A]">
+          <h2 className="text-lg font-black text-[#FFD23F] mb-3">FILTRER PAR PERIODE</h2>
+          <div className="flex flex-wrap gap-4 items-center">
+            <div className="flex items-center gap-2">
+              <label className="text-[#F5F0E6] font-bold text-sm">DU</label>
+              <input
+                type="date"
+                value={periodStart}
+                onChange={(e) => setPeriodStart(e.target.value)}
+                className="p-2 bg-[#F5F0E6] font-medium border-2 border-[#FFD23F]"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-[#F5F0E6] font-bold text-sm">AU</label>
+              <input
+                type="date"
+                value={periodEnd}
+                onChange={(e) => setPeriodEnd(e.target.value)}
+                className="p-2 bg-[#F5F0E6] font-medium border-2 border-[#FFD23F]"
+              />
+            </div>
+            <button
+              onClick={() => {
+                setPeriodStart('2024-11-01');
+                const now = new Date();
+                setPeriodEnd(formatLocalDate(now.getFullYear(), now.getMonth(), now.getDate()));
+              }}
+              className="px-4 py-2 bg-[#2D5A9E] text-white font-bold text-sm hover:bg-[#24487E]"
+            >
+              TOUT
+            </button>
+          </div>
+        </section>
+
         {/* Global Stats */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-[#1A1A1A] p-6 text-center">
-            <p className="text-[#888] font-bold mb-1">SURPLUS TOTAL EQUIPE</p>
+            <p className="text-[#888] font-bold mb-1">SURPLUS PERIODE</p>
             <p className={`text-4xl font-black ${globalStats.totalSurplus >= 0 ? 'text-[#4CAF50]' : 'text-[#E63946]'}`}>
               {formatHours(globalStats.totalSurplus)}
             </p>
+            <p className="text-[#666] text-sm mt-1">{periodStart} → {periodEnd}</p>
           </div>
 
           <div className="bg-[#2D5A9E] p-6">
             <div className="flex items-center justify-between">
-              <button onClick={prevMonth} className="p-2 bg-[#1A1A1A] text-white font-black">←</button>
+              <button onClick={prevMonth} className="p-2 bg-[#1A1A1A] text-white font-black hover:bg-[#333]">←</button>
               <h2 className="text-xl font-black text-[#FFD23F]">
                 {MONTHS_FR[currentMonth.month]} {currentMonth.year}
               </h2>
-              <button onClick={nextMonth} className="p-2 bg-[#1A1A1A] text-white font-black">→</button>
+              <button onClick={nextMonth} className="p-2 bg-[#1A1A1A] text-white font-black hover:bg-[#333]">→</button>
             </div>
+            <p className="text-center text-[#F5F0E6] text-sm mt-2">Colonne MOIS</p>
           </div>
 
           <div className="bg-[#1A1A1A] p-6 text-center">
-            <p className="text-[#888] font-bold mb-1">HEURES TRAVAILLEES</p>
+            <p className="text-[#888] font-bold mb-1">HEURES PERIODE</p>
             <p className="text-4xl font-black text-[#F5F0E6]">
               {formatHoursSimple(globalStats.totalWorked)}
             </p>
@@ -324,7 +413,7 @@ export default function DashboardPage() {
                 <th className="p-3 text-center font-black">POSTE</th>
                 <th className="p-3 text-center font-black">SEMAINE</th>
                 <th className="p-3 text-center font-black">MOIS</th>
-                <th className="p-3 text-center font-black">TOTAL</th>
+                <th className="p-3 text-center font-black">PERIODE</th>
                 <th className="p-3 text-center font-black">ABSENCES</th>
                 <th className="p-3 text-center font-black">ACTIONS</th>
               </tr>
@@ -361,9 +450,9 @@ export default function DashboardPage() {
                   <td className="p-3 text-center">
                     <span
                       className="font-black text-lg"
-                      style={{ color: stat.totalSurplus >= 0 ? '#4CAF50' : '#E63946' }}
+                      style={{ color: stat.periodSurplus >= 0 ? '#4CAF50' : '#E63946' }}
                     >
-                      {formatHours(stat.totalSurplus)}
+                      {formatHours(stat.periodSurplus)}
                     </span>
                   </td>
                   <td className="p-3 text-center">
