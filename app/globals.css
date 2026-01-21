@@ -1,26 +1,73 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bauhaus-cream: #F5F0E6;
+  --bauhaus-black: #1A1A1A;
+  --bauhaus-red: #E63946;
+  --bauhaus-blue: #2D5A9E;
+  --bauhaus-yellow: #FFD23F;
+  --bauhaus-green: #4CAF50;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-space-grotesk);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bauhaus-cream);
+  color: var(--bauhaus-black);
+  font-family: var(--font-space-grotesk), 'Space Grotesk', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Bauhaus-style inputs */
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="time"] {
+  font-family: inherit;
+}
+
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  background-color: var(--bauhaus-black);
+  padding: 4px;
+  cursor: pointer;
+}
+
+/* Selection styling */
+::selection {
+  background: var(--bauhaus-yellow);
+  color: var(--bauhaus-black);
+}
+
+/* Focus states */
+input:focus,
+button:focus {
+  outline: 4px solid var(--bauhaus-yellow);
+  outline-offset: -4px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bauhaus-cream);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bauhaus-black);
+  border: 2px solid var(--bauhaus-cream);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bauhaus-red);
 }
