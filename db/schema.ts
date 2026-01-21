@@ -16,9 +16,22 @@ export const timeEntries = pgTable('time_entries', {
   entryTime: time('entry_time'),
   exitTime: time('exit_time'),
   excluded: boolean('excluded').default(false).notNull(),
+  absenceType: text('absence_type'), // null = travail, 'conge' | 'maladie' | 'rtt' | 'teletravail' | 'autre'
+  absenceNote: text('absence_note'), // note libre pour préciser
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const ABSENCE_TYPES = {
+  conge: { label: 'Congé', color: '#2D5A9E' },
+  maladie: { label: 'Maladie', color: '#E63946' },
+  rtt: { label: 'RTT', color: '#FFD23F' },
+  teletravail: { label: 'Télétravail', color: '#4CAF50' },
+  formation: { label: 'Formation', color: '#9C27B0' },
+  autre: { label: 'Autre', color: '#888' },
+} as const;
+
+export type AbsenceType = keyof typeof ABSENCE_TYPES;
 
 export type Employee = typeof employees.$inferSelect;
 export type NewEmployee = typeof employees.$inferInsert;

@@ -24,7 +24,18 @@ interface TimeEntry {
   entryTime: string | null;
   exitTime: string | null;
   excluded: boolean;
+  absenceType: string | null;
+  absenceNote: string | null;
 }
+
+const ABSENCE_TYPES = {
+  conge: { label: 'Congé', color: '#2D5A9E' },
+  maladie: { label: 'Maladie', color: '#E63946' },
+  rtt: { label: 'RTT', color: '#FFD23F' },
+  teletravail: { label: 'Télétravail', color: '#4CAF50' },
+  formation: { label: 'Formation', color: '#9C27B0' },
+  autre: { label: 'Autre', color: '#888' },
+} as const;
 
 const MONTHS_FR = [
   'Janvier', 'Fevrier', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -32,6 +43,14 @@ const MONTHS_FR = [
 ];
 
 const DAYS_FR = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+interface EditingDay {
+  dateStr: string;
+  entryTime: string;
+  exitTime: string;
+  absenceType: string;
+  absenceNote: string;
+}
 
 export default function EmployeeDetailPage() {
   const params = useParams();
@@ -41,6 +60,7 @@ export default function EmployeeDetailPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingDays, setSavingDays] = useState<Record<string, boolean>>({});
+  const [editingDay, setEditingDay] = useState<EditingDay | null>(null);
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -67,20 +87,68 @@ export default function EmployeeDetailPage() {
     fetchData();
   }, [fetchData]);
 
-  const toggleExcluded = async (dateStr: string, currentExcluded: boolean) => {
+  const openEditModal = (dateStr: string) => {
+    const entry = entries.find(e => e.date === dateStr);
+    setEditingDay({
+      dateStr,
+      entryTime: entry?.entryTime || '',
+      exitTime: entry?.exitTime || '',
+      absenceType: entry?.absenceType || '',
+      absenceNote: entry?.absenceNote || '',
+    });
+  };
+
+  const saveEditedDay = async () => {
+    if (!editingDay) return;
+
+    setSavingDays(prev => ({ ...prev, [editingDay.dateStr]: true }));
+
+    try {
+      const isAbsence = !!editingDay.absenceType;
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId,
+          date: editingDay.dateStr,
+          entryTime: isAbsence ? null : (editingDay.entryTime || null),
+          exitTime: isAbsence ? null : (editingDay.exitTime || null),
+          excluded: isAbsence,
+          absenceType: editingDay.absenceType || null,
+          absenceNote: editingDay.absenceNote || null,
+        }),
+      });
+
+      if (res.ok) {
+        const savedEntry = await res.json();
+        setEntries(prev => {
+          const filtered = prev.filter(e => e.date !== editingDay.dateStr);
+          return [...filtered, savedEntry];
+        });
+        setEditingDay(null);
+      }
+    } catch (error) {
+      console.error('Error saving day:', error);
+    } finally {
+      setSavingDays(prev => ({ ...prev, [editingDay.dateStr]: false }));
+    }
+  };
+
+  const clearDay = async (dateStr: string) => {
     setSavingDays(prev => ({ ...prev, [dateStr]: true }));
 
     try {
-      const existingEntry = entries.find(e => e.date === dateStr);
       const res = await fetch('/api/entries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           employeeId,
           date: dateStr,
-          entryTime: existingEntry?.entryTime || null,
-          exitTime: existingEntry?.exitTime || null,
-          excluded: !currentExcluded,
+          entryTime: null,
+          exitTime: null,
+          excluded: false,
+          absenceType: null,
+          absenceNote: null,
         }),
       });
 
@@ -92,7 +160,7 @@ export default function EmployeeDetailPage() {
         });
       }
     } catch (error) {
-      console.error('Error toggling excluded:', error);
+      console.error('Error clearing day:', error);
     } finally {
       setSavingDays(prev => ({ ...prev, [dateStr]: false }));
     }
@@ -143,7 +211,8 @@ export default function EmployeeDetailPage() {
     daysInMonth.forEach(day => {
       const dayEntry = entries.find(e => e.date === day.dateStr);
 
-      if (dayEntry?.excluded) return;
+      // Skip if excluded/absence (except télétravail which counts as work)
+      if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') return;
 
       if (!day.isWeekend) workDays++;
       if (dayEntry) {
@@ -197,6 +266,9 @@ export default function EmployeeDetailPage() {
             <Link href="/" className="px-4 py-2 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition">
               POINTER
             </Link>
+            <Link href="/dashboard" className="px-4 py-2 bg-[#2D5A9E] text-white font-bold hover:bg-[#24487E] transition">
+              DASHBOARD
+            </Link>
             <Link href="/setup" className="px-4 py-2 bg-[#F5F0E6] text-[#1A1A1A] font-bold hover:bg-[#FFD23F] transition">
               SETUP
             </Link>
@@ -237,35 +309,63 @@ export default function EmployeeDetailPage() {
           </div>
         </section>
 
+        {/* Legend */}
+        <div className="flex flex-wrap gap-3 mb-4">
+          {Object.entries(ABSENCE_TYPES).map(([key, { label, color }]) => (
+            <div key={key} className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-[#1A1A1A]" style={{ backgroundColor: color }}></div>
+              <span className="text-sm font-medium">{label}</span>
+            </div>
+          ))}
+        </div>
+
         <section className="space-y-2">
           {daysInMonth.map((day, index) => {
             const entry = entries.find(e => e.date === day.dateStr);
-            const isExcluded = entry?.excluded || false;
+            const isAbsence = entry?.excluded || false;
+            const absenceType = entry?.absenceType as keyof typeof ABSENCE_TYPES | null;
             const isSaving = savingDays[day.dateStr] || false;
             const worked = entry ? calculateWorkedHoursFromStrings(entry.entryTime, entry.exitTime) : 0;
-            const expected = day.isWeekend || isExcluded ? 0 : employee.hoursPerWeek / 5;
+            const isTeletravail = absenceType === 'teletravail';
+            const expected = day.isWeekend || (isAbsence && !isTeletravail) ? 0 : employee.hoursPerWeek / 5;
             const surplus = worked - expected;
 
-            const accentColor = index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F';
+            const accentColor = absenceType ? ABSENCE_TYPES[absenceType]?.color :
+              (index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F');
 
             return (
               <div
                 key={day.dateStr}
                 className={`border-4 border-[#1A1A1A] flex items-center ${
-                  day.isWeekend ? 'bg-[#E8E3D9] opacity-60' : isExcluded ? 'bg-[#E8E3D9] opacity-70' : 'bg-white'
+                  day.isWeekend ? 'bg-[#E8E3D9] opacity-60' : isAbsence ? 'bg-[#E8E3D9]' : 'bg-white'
                 }`}
                 style={{ borderLeftColor: accentColor, borderLeftWidth: '6px' }}
               >
                 {/* Date */}
-                <div className="p-3 w-24 text-center border-r-4 border-[#1A1A1A]">
+                <div className="p-3 w-20 text-center border-r-4 border-[#1A1A1A]">
                   <p className="text-2xl font-black">{day.date.getDate()}</p>
                   <p className="text-xs font-bold text-[#666]">{day.dayName}</p>
                 </div>
 
-                {/* Times */}
+                {/* Content */}
                 <div className="flex-1 p-3 flex items-center gap-4">
-                  {isExcluded ? (
-                    <span className="text-[#E63946] font-bold">EXCLU</span>
+                  {isAbsence && absenceType ? (
+                    <div>
+                      <span
+                        className="font-bold px-2 py-1 text-white text-sm"
+                        style={{ backgroundColor: ABSENCE_TYPES[absenceType]?.color }}
+                      >
+                        {ABSENCE_TYPES[absenceType]?.label}
+                      </span>
+                      {entry?.absenceNote && (
+                        <span className="ml-2 text-[#666] text-sm">{entry.absenceNote}</span>
+                      )}
+                      {isTeletravail && entry?.entryTime && entry?.exitTime && (
+                        <span className="ml-2 font-bold text-[#666]">
+                          {entry.entryTime} → {entry.exitTime} ({formatHoursSimple(worked)})
+                        </span>
+                      )}
+                    </div>
                   ) : entry?.entryTime && entry?.exitTime ? (
                     <>
                       <span className="font-bold text-[#666]">
@@ -278,33 +378,35 @@ export default function EmployeeDetailPage() {
                   ) : day.isWeekend ? (
                     <span className="text-[#888] font-medium">Week-end</span>
                   ) : (
-                    <span className="text-[#888] font-medium">Non pointe</span>
+                    <span className="text-[#888] font-medium">Non pointé</span>
                   )}
                 </div>
 
-                {/* Exclude checkbox */}
+                {/* Actions */}
                 {!day.isWeekend && (
-                  <label className="p-3 cursor-pointer flex items-center gap-2">
-                    <span className="text-xs font-bold text-[#666]">EXCLURE</span>
+                  <div className="p-2 flex items-center gap-2">
                     <button
-                      onClick={() => toggleExcluded(day.dateStr, isExcluded)}
+                      onClick={() => openEditModal(day.dateStr)}
                       disabled={isSaving}
-                      className={`w-8 h-8 border-4 border-[#1A1A1A] flex items-center justify-center transition ${
-                        isSaving ? 'bg-[#888]' : isExcluded ? 'bg-[#E63946]' : 'bg-[#F5F0E6] hover:bg-[#FFD23F]'
-                      }`}
+                      className="px-3 py-1 bg-[#2D5A9E] text-white font-bold text-sm hover:bg-[#24487E] transition"
                     >
-                      {isSaving ? (
-                        <span className="text-white text-xs">...</span>
-                      ) : isExcluded ? (
-                        <span className="text-white font-black">X</span>
-                      ) : null}
+                      {isSaving ? '...' : 'MODIFIER'}
                     </button>
-                  </label>
+                    {(entry?.entryTime || entry?.absenceType) && (
+                      <button
+                        onClick={() => clearDay(day.dateStr)}
+                        disabled={isSaving}
+                        className="px-2 py-1 bg-[#E63946] text-white font-bold text-sm hover:bg-[#C62D3A] transition"
+                      >
+                        X
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 {/* Surplus */}
-                {!day.isWeekend && !isExcluded && (
-                  <div className="p-3 w-24 text-center">
+                {!day.isWeekend && !isAbsence && (
+                  <div className="p-3 w-20 text-center">
                     <p
                       className="font-black"
                       style={{ color: surplus >= 0 ? '#4CAF50' : '#E63946' }}
@@ -318,6 +420,87 @@ export default function EmployeeDetailPage() {
           })}
         </section>
       </main>
+
+      {/* Edit Modal */}
+      {editingDay && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#F5F0E6] border-4 border-[#1A1A1A] p-6 w-full max-w-md">
+            <h3 className="text-xl font-black mb-4">
+              MODIFIER LE {new Date(editingDay.dateStr).toLocaleDateString('fr-FR')}
+            </h3>
+
+            {/* Type selector */}
+            <div className="mb-4">
+              <label className="block font-bold text-[#666] mb-2">TYPE DE JOURNEE</label>
+              <select
+                value={editingDay.absenceType}
+                onChange={(e) => setEditingDay({ ...editingDay, absenceType: e.target.value })}
+                className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+              >
+                <option value="">Journée travaillée</option>
+                {Object.entries(ABSENCE_TYPES).map(([key, { label }]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Hours (only if working day or télétravail) */}
+            {(!editingDay.absenceType || editingDay.absenceType === 'teletravail') && (
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block font-bold text-[#666] mb-2">ENTREE</label>
+                  <input
+                    type="time"
+                    value={editingDay.entryTime}
+                    onChange={(e) => setEditingDay({ ...editingDay, entryTime: e.target.value })}
+                    className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-[#666] mb-2">SORTIE</label>
+                  <input
+                    type="time"
+                    value={editingDay.exitTime}
+                    onChange={(e) => setEditingDay({ ...editingDay, exitTime: e.target.value })}
+                    className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Note */}
+            {editingDay.absenceType && (
+              <div className="mb-4">
+                <label className="block font-bold text-[#666] mb-2">NOTE (optionnel)</label>
+                <input
+                  type="text"
+                  value={editingDay.absenceNote}
+                  onChange={(e) => setEditingDay({ ...editingDay, absenceNote: e.target.value })}
+                  placeholder="Ex: Vacances, RDV médecin..."
+                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                />
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-4">
+              <button
+                onClick={() => setEditingDay(null)}
+                className="flex-1 p-3 bg-[#888] text-white font-bold hover:bg-[#666] transition"
+              >
+                ANNULER
+              </button>
+              <button
+                onClick={saveEditedDay}
+                disabled={savingDays[editingDay.dateStr]}
+                className="flex-1 p-3 bg-[#4CAF50] text-white font-bold hover:bg-[#3D8B40] transition"
+              >
+                {savingDays[editingDay.dateStr] ? '...' : 'ENREGISTRER'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="fixed bottom-0 left-0 right-0 h-2 flex">
         <div className="flex-1 bg-[#E63946]"></div>
