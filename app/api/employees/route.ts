@@ -2,6 +2,24 @@ import { NextResponse } from 'next/server';
 import { db, employees } from '@/db';
 import { desc } from 'drizzle-orm';
 
+const AVATARS = [
+  '/avatars/avatar-1.png',
+  '/avatars/avatar-2.webp',
+  '/avatars/avatar-3.webp',
+  '/avatars/avatar-4.webp',
+  '/avatars/avatar-5.webp',
+  '/avatars/avatar-6.webp',
+  '/avatars/avatar-7.webp',
+  '/avatars/avatar-8.webp',
+  '/avatars/avatar-9.png',
+  '/avatars/avatar-10.png',
+  '/avatars/avatar-11.png',
+];
+
+function getRandomAvatar(): string {
+  return AVATARS[Math.floor(Math.random() * AVATARS.length)];
+}
+
 export async function GET() {
   try {
     const allEmployees = await db.select().from(employees).orderBy(desc(employees.createdAt));
@@ -26,6 +44,7 @@ export async function POST(request: Request) {
       lastName,
       position: position || null,
       hoursPerWeek: hoursPerWeek || 35,
+      avatarUrl: getRandomAvatar(),
     }).returning();
 
     return NextResponse.json(newEmployee, { status: 201 });

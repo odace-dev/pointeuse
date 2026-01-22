@@ -8,6 +8,7 @@ import {
   formatHours,
   formatHoursSimple,
 } from '@/lib/utils';
+import { ABSENCE_TYPES } from '@/db/schema';
 
 interface Employee {
   id: string;
@@ -15,6 +16,7 @@ interface Employee {
   lastName: string;
   position: string | null;
   hoursPerWeek: number;
+  avatarUrl: string | null;
 }
 
 interface TimeEntry {
@@ -27,15 +29,6 @@ interface TimeEntry {
   absenceType: string | null;
   absenceNote: string | null;
 }
-
-const ABSENCE_TYPES = {
-  conge: { label: 'Congé', color: '#2D5A9E' },
-  maladie: { label: 'Maladie', color: '#E63946' },
-  rtt: { label: 'RTT', color: '#FFD23F' },
-  teletravail: { label: 'Télétravail', color: '#4CAF50' },
-  formation: { label: 'Formation', color: '#9C27B0' },
-  autre: { label: 'Autre', color: '#888' },
-} as const;
 
 const MONTHS_FR = [
   'Janvier', 'Fevrier', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -50,6 +43,20 @@ interface EditingDay {
   exitTime: string;
   absenceType: string;
   absenceNote: string;
+}
+
+function normalizeDate(dateInput: string | Date): string {
+  if (typeof dateInput === 'string') {
+    if (dateInput.includes('T')) {
+      return dateInput.split('T')[0];
+    }
+    return dateInput;
+  }
+  return dateInput.toISOString().split('T')[0];
+}
+
+function formatLocalDate(year: number, month: number, day: number): string {
+  return `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
 }
 
 export default function EmployeeDetailPage() {
@@ -73,9 +80,15 @@ export default function EmployeeDetailPage() {
         fetch(`/api/entries?employeeId=${employeeId}`),
       ]);
       const [empData, entData] = await Promise.all([empRes.json(), entRes.json()]);
-      const emp = empData.find((e: Employee) => e.id === employeeId);
+      const empArray = Array.isArray(empData) ? empData : [];
+      const emp = empArray.find((e: Employee) => e.id === employeeId);
       setEmployee(emp || null);
-      setEntries(entData);
+      const entriesArray = Array.isArray(entData) ? entData : [];
+      const normalizedEntries = entriesArray.map((e: TimeEntry) => ({
+        ...e,
+        date: normalizeDate(e.date),
+      }));
+      setEntries(normalizedEntries);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -111,8 +124,8 @@ export default function EmployeeDetailPage() {
         body: JSON.stringify({
           employeeId,
           date: editingDay.dateStr,
-          entryTime: isAbsence ? null : (editingDay.entryTime || null),
-          exitTime: isAbsence ? null : (editingDay.exitTime || null),
+          entryTime: isAbsence && editingDay.absenceType !== 'teletravail' ? null : (editingDay.entryTime || null),
+          exitTime: isAbsence && editingDay.absenceType !== 'teletravail' ? null : (editingDay.exitTime || null),
           excluded: isAbsence,
           absenceType: editingDay.absenceType || null,
           absenceNote: editingDay.absenceNote || null,
@@ -123,7 +136,7 @@ export default function EmployeeDetailPage() {
         const savedEntry = await res.json();
         setEntries(prev => {
           const filtered = prev.filter(e => e.date !== editingDay.dateStr);
-          return [...filtered, savedEntry];
+          return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
         });
         setEditingDay(null);
       }
@@ -156,7 +169,7 @@ export default function EmployeeDetailPage() {
         const savedEntry = await res.json();
         setEntries(prev => {
           const filtered = prev.filter(e => e.date !== dateStr);
-          return [...filtered, savedEntry];
+          return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
         });
       }
     } catch (error) {
@@ -193,7 +206,7 @@ export default function EmployeeDetailPage() {
       const dayOfWeek = date.getDay();
       days.push({
         date,
-        dateStr: date.toISOString().split('T')[0],
+        dateStr: formatLocalDate(currentMonth.year, currentMonth.month, day),
         isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
         dayName: DAYS_FR[dayOfWeek],
       });
@@ -206,21 +219,23 @@ export default function EmployeeDetailPage() {
     if (!employee) return { worked: 0, expected: 0, surplus: 0 };
 
     let totalWorked = 0;
-    let workDays = 0;
+    let daysWithEntry = 0;
 
     daysInMonth.forEach(day => {
+      if (day.isWeekend) return;
+
       const dayEntry = entries.find(e => e.date === day.dateStr);
 
-      // Skip if excluded/absence (except télétravail which counts as work)
+      // Skip if excluded/absence (except teletravail which counts as work)
       if (dayEntry?.excluded && dayEntry?.absenceType !== 'teletravail') return;
 
-      if (!day.isWeekend) workDays++;
-      if (dayEntry) {
+      if (dayEntry && dayEntry.entryTime && dayEntry.exitTime) {
         totalWorked += calculateWorkedHoursFromStrings(dayEntry.entryTime, dayEntry.exitTime);
+        daysWithEntry++;
       }
     });
 
-    const expected = (employee.hoursPerWeek / 5) * workDays;
+    const expected = (employee.hoursPerWeek / 5) * daysWithEntry;
     return {
       worked: totalWorked,
       expected,
@@ -228,241 +243,317 @@ export default function EmployeeDetailPage() {
     };
   }, [employee, entries, daysInMonth]);
 
+  const getInitials = (firstName: string, lastName: string) => {
+    return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F5F0E6] flex items-center justify-center">
-        <div className="text-2xl font-black">CHARGEMENT...</div>
+      <div className="min-h-screen bg-white flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="w-12 h-12 rounded-xl bg-[#F45757] mx-auto mb-4 animate-pulse"></div>
+          <p className="text-[#4A5565]">Chargement...</p>
+        </div>
       </div>
     );
   }
 
   if (!employee) {
     return (
-      <div className="min-h-screen bg-[#F5F0E6] flex items-center justify-center flex-col gap-4">
-        <div className="text-2xl font-black">EMPLOYE NON TROUVE</div>
-        <Link href="/" className="px-6 py-3 bg-[#E63946] text-white font-bold">
-          RETOUR
+      <div className="min-h-screen bg-white flex items-center justify-center flex-col gap-6 p-4">
+        <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center">
+          <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <p className="text-black font-medium">Employe non trouve</p>
+        <Link href="/" className="btn btn-primary">
+          Retour
         </Link>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F0E6] text-[#1A1A1A] pb-8">
-      <header className="bg-[#1A1A1A] text-[#F5F0E6] p-6">
-        <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <Link href="/" className="text-[#888] hover:text-[#FFD23F] transition text-sm font-bold">
-              ← RETOUR
-            </Link>
-            <h1 className="text-3xl font-black tracking-tight">
-              {employee.firstName} {employee.lastName}
-            </h1>
-            <p className="text-[#888]">
-              {employee.position || 'Employe'} — {employee.hoursPerWeek}h/sem
-            </p>
+    <div className="min-h-screen bg-white pb-8">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-5xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img src="/logo.svg" alt="Logo" className="h-10 w-auto" />
+            </div>
+            <nav className="flex items-center gap-2">
+              <Link
+                href="/"
+                className="px-4 py-2 text-sm font-medium text-[#4A5565] hover:text-black hover:bg-gray-100 rounded-lg transition-all"
+              >
+                Pointer
+              </Link>
+              <Link
+                href="/dashboard"
+                className="px-4 py-2 text-sm font-medium text-[#4A5565] hover:text-black hover:bg-gray-100 rounded-lg transition-all"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/setup"
+                className="px-4 py-2 text-sm font-medium text-[#4A5565] hover:text-black hover:bg-gray-100 rounded-lg transition-all"
+              >
+                Config
+              </Link>
+            </nav>
           </div>
-          <nav className="flex gap-4">
-            <Link href="/" className="px-4 py-2 bg-[#E63946] text-white font-bold hover:bg-[#C62D3A] transition">
-              POINTER
-            </Link>
-            <Link href="/dashboard" className="px-4 py-2 bg-[#2D5A9E] text-white font-bold hover:bg-[#24487E] transition">
-              DASHBOARD
-            </Link>
-            <Link href="/setup" className="px-4 py-2 bg-[#F5F0E6] text-[#1A1A1A] font-bold hover:bg-[#FFD23F] transition">
-              SETUP
-            </Link>
-          </nav>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto p-6">
-        <section className="flex flex-col md:flex-row gap-6 mb-8">
-          <div className="bg-[#2D5A9E] p-6 flex-1">
+      <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+        {/* Employee Header */}
+        <div className="bg-white rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.1)] border border-gray-200 relative overflow-hidden">
+          <div className="relative flex flex-col sm:flex-row sm:items-center gap-4">
+            {employee.avatarUrl ? (
+              <img
+                src={employee.avatarUrl}
+                alt={`${employee.firstName} ${employee.lastName}`}
+                className="w-16 h-16 rounded-xl object-cover shadow-sm"
+              />
+            ) : (
+              <div className="w-16 h-16 rounded-xl bg-[#F45757] flex items-center justify-center text-white text-2xl font-bold shadow-sm">
+                {getInitials(employee.firstName, employee.lastName)}
+              </div>
+            )}
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-black">{employee.firstName} {employee.lastName}</h2>
+              <p className="text-[#4A5565]">{employee.position || 'Personnel'} • {employee.hoursPerWeek}h/semaine</p>
+            </div>
+            <Link href="/setup" className="btn btn-secondary text-sm">
+              Modifier
+            </Link>
+          </div>
+        </div>
+
+        {/* Stats Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Month Navigation */}
+          <div className="bg-white rounded-xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] border border-gray-200">
+            <p className="text-[#4A5565] text-xs font-medium mb-3">Periode</p>
             <div className="flex items-center justify-between">
               <button
                 onClick={prevMonth}
-                className="p-2 bg-[#1A1A1A] text-[#F5F0E6] font-black hover:bg-[#333] transition"
+                className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center text-[#4A5565] hover:bg-gray-200 transition"
               >
-                ←
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
               </button>
-              <h2 className="text-2xl font-black text-[#FFD23F]">
-                {MONTHS_FR[currentMonth.month]} {currentMonth.year}
-              </h2>
+              <div className="text-center">
+                <p className="font-semibold text-black">{MONTHS_FR[currentMonth.month]}</p>
+                <p className="text-xs text-[#4A5565]">{currentMonth.year}</p>
+              </div>
               <button
                 onClick={nextMonth}
-                className="p-2 bg-[#1A1A1A] text-[#F5F0E6] font-black hover:bg-[#333] transition"
+                className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center text-[#4A5565] hover:bg-gray-200 transition"
               >
-                →
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
               </button>
             </div>
           </div>
 
-          <div className="bg-[#1A1A1A] p-6 flex-1 text-center">
-            <p className="text-[#888] font-bold mb-1">BILAN DU MOIS</p>
-            <p className={`text-4xl font-black ${monthStats.surplus >= 0 ? 'text-[#4CAF50]' : 'text-[#E63946]'}`}>
-              {formatHours(monthStats.surplus)}
-            </p>
-            <p className="text-[#F5F0E6] mt-2">
-              {formatHoursSimple(monthStats.worked)} / {formatHoursSimple(monthStats.expected)}
-            </p>
+          {/* Hours Worked */}
+          <div className="bg-white rounded-xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] border border-gray-200">
+            <p className="text-[#4A5565] text-xs font-medium mb-2">Heures travaillees</p>
+            <p className="text-3xl font-bold text-black">{formatHoursSimple(monthStats.worked)}</p>
+            <p className="text-xs text-[#4A5565] mt-1">sur {formatHoursSimple(monthStats.expected)} attendues</p>
           </div>
-        </section>
+
+          {/* Surplus Card */}
+          <div className="bg-orange-50 border-2 border-dashed border-orange-300 rounded-xl p-5">
+            <p className="text-orange-600 text-xs font-medium mb-2">Bilan du mois</p>
+            <div className="flex items-end justify-between">
+              <p className={`text-3xl font-bold ${monthStats.surplus >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {formatHours(monthStats.surplus)}
+              </p>
+              <div className={`flex items-center gap-1 px-2 py-1 rounded-full ${monthStats.surplus >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                {monthStats.surplus >= 0 ? (
+                  <svg className="w-3 h-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                  </svg>
+                ) : (
+                  <svg className="w-3 h-3 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                  </svg>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap gap-3 mb-4">
+        <div className="flex flex-wrap gap-3">
           {Object.entries(ABSENCE_TYPES).map(([key, { label, color }]) => (
-            <div key={key} className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-[#1A1A1A]" style={{ backgroundColor: color }}></div>
-              <span className="text-sm font-medium">{label}</span>
+            <div key={key} className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full shadow-sm border border-gray-200">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }}></div>
+              <span className="text-xs text-[#4A5565]">{label}</span>
             </div>
           ))}
         </div>
 
-        <section className="space-y-2">
-          {daysInMonth.map((day, index) => {
-            const entry = entries.find(e => e.date === day.dateStr);
-            const isAbsence = entry?.excluded || false;
-            const absenceType = entry?.absenceType as keyof typeof ABSENCE_TYPES | null;
-            const isSaving = savingDays[day.dateStr] || false;
-            const worked = entry ? calculateWorkedHoursFromStrings(entry.entryTime, entry.exitTime) : 0;
-            const isTeletravail = absenceType === 'teletravail';
-            const expected = day.isWeekend || (isAbsence && !isTeletravail) ? 0 : employee.hoursPerWeek / 5;
-            const surplus = worked - expected;
+        {/* Days List */}
+        <div className="bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.1)] border border-gray-200 overflow-hidden">
+          <div className="p-5 border-b border-gray-200">
+            <h3 className="font-semibold text-black">Journal du mois</h3>
+          </div>
 
-            const accentColor = absenceType ? ABSENCE_TYPES[absenceType]?.color :
-              (index % 3 === 0 ? '#E63946' : index % 3 === 1 ? '#2D5A9E' : '#FFD23F');
+          <div className="divide-y divide-gray-100">
+            {daysInMonth.map((day) => {
+              const entry = entries.find(e => e.date === day.dateStr);
+              const isAbsence = entry?.excluded || false;
+              const absenceType = entry?.absenceType as keyof typeof ABSENCE_TYPES | null;
+              const isSaving = savingDays[day.dateStr] || false;
+              const worked = entry ? calculateWorkedHoursFromStrings(entry.entryTime, entry.exitTime) : 0;
+              const isTeletravail = absenceType === 'teletravail';
+              const expected = day.isWeekend || (isAbsence && !isTeletravail) ? 0 : employee.hoursPerWeek / 5;
+              const surplus = worked - expected;
 
-            return (
-              <div
-                key={day.dateStr}
-                className={`border-4 border-[#1A1A1A] flex items-center ${
-                  day.isWeekend ? 'bg-[#E8E3D9] opacity-60' : isAbsence ? 'bg-[#E8E3D9]' : 'bg-white'
-                }`}
-                style={{ borderLeftColor: accentColor, borderLeftWidth: '6px' }}
-              >
-                {/* Date */}
-                <div className="p-3 w-20 text-center border-r-4 border-[#1A1A1A]">
-                  <p className="text-2xl font-black">{day.date.getDate()}</p>
-                  <p className="text-xs font-bold text-[#666]">{day.dayName}</p>
-                </div>
+              return (
+                <div
+                  key={day.dateStr}
+                  className={`flex items-center gap-4 p-4 hover:bg-gray-50 transition ${day.isWeekend ? 'opacity-50 bg-gray-50' : ''}`}
+                >
+                  {/* Date */}
+                  <div className="w-14 text-center">
+                    <p className="text-2xl font-bold text-black">{day.date.getDate()}</p>
+                    <p className="text-xs text-[#4A5565]">{day.dayName}</p>
+                  </div>
 
-                {/* Content */}
-                <div className="flex-1 p-3 flex items-center gap-4">
-                  {isAbsence && absenceType ? (
-                    <div>
-                      <span
-                        className="font-bold px-2 py-1 text-white text-sm"
-                        style={{ backgroundColor: ABSENCE_TYPES[absenceType]?.color }}
-                      >
-                        {ABSENCE_TYPES[absenceType]?.label}
-                      </span>
-                      {entry?.absenceNote && (
-                        <span className="ml-2 text-[#666] text-sm">{entry.absenceNote}</span>
-                      )}
-                      {isTeletravail && entry?.entryTime && entry?.exitTime && (
-                        <span className="ml-2 font-bold text-[#666]">
-                          {entry.entryTime} → {entry.exitTime} ({formatHoursSimple(worked)})
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    {isAbsence && absenceType ? (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className="px-3 py-1 rounded-full text-xs font-medium text-white"
+                          style={{ backgroundColor: ABSENCE_TYPES[absenceType]?.color }}
+                        >
+                          {ABSENCE_TYPES[absenceType]?.label}
                         </span>
-                      )}
-                    </div>
-                  ) : entry?.entryTime && entry?.exitTime ? (
-                    <>
-                      <span className="font-bold text-[#666]">
-                        {entry.entryTime} → {entry.exitTime}
-                      </span>
-                      <span className="font-black">
-                        {formatHoursSimple(worked)}
-                      </span>
-                    </>
-                  ) : day.isWeekend ? (
-                    <span className="text-[#888] font-medium">Week-end</span>
-                  ) : (
-                    <span className="text-[#888] font-medium">Non pointé</span>
-                  )}
-                </div>
-
-                {/* Actions */}
-                {!day.isWeekend && (
-                  <div className="p-2 flex items-center gap-2">
-                    <button
-                      onClick={() => openEditModal(day.dateStr)}
-                      disabled={isSaving}
-                      className="px-3 py-1 bg-[#2D5A9E] text-white font-bold text-sm hover:bg-[#24487E] transition"
-                    >
-                      {isSaving ? '...' : 'MODIFIER'}
-                    </button>
-                    {(entry?.entryTime || entry?.absenceType) && (
-                      <button
-                        onClick={() => clearDay(day.dateStr)}
-                        disabled={isSaving}
-                        className="px-2 py-1 bg-[#E63946] text-white font-bold text-sm hover:bg-[#C62D3A] transition"
-                      >
-                        X
-                      </button>
+                        {entry?.absenceNote && (
+                          <span className="text-sm text-[#4A5565]">{entry.absenceNote}</span>
+                        )}
+                        {isTeletravail && entry?.entryTime && entry?.exitTime && (
+                          <span className="text-sm text-[#4A5565]">
+                            {entry.entryTime} → {entry.exitTime} ({formatHoursSimple(worked)})
+                          </span>
+                        )}
+                      </div>
+                    ) : entry?.entryTime && entry?.exitTime ? (
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm text-black">
+                          {entry.entryTime} → {entry.exitTime}
+                        </span>
+                        <span className="font-semibold text-black">
+                          {formatHoursSimple(worked)}
+                        </span>
+                        <span className={`text-sm font-medium ${surplus >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {formatHours(surplus)}
+                        </span>
+                      </div>
+                    ) : day.isWeekend ? (
+                      <span className="text-sm text-[#9CA3AF]">Week-end</span>
+                    ) : (
+                      <span className="text-sm text-[#9CA3AF]">Non pointe</span>
                     )}
                   </div>
-                )}
 
-                {/* Surplus */}
-                {!day.isWeekend && !isAbsence && (
-                  <div className="p-3 w-20 text-center">
-                    <p
-                      className="font-black"
-                      style={{ color: surplus >= 0 ? '#4CAF50' : '#E63946' }}
-                    >
-                      {formatHours(surplus)}
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </section>
+                  {/* Actions */}
+                  {!day.isWeekend && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openEditModal(day.dateStr)}
+                        disabled={isSaving}
+                        className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-[#4A5565] hover:bg-gray-200 transition"
+                      >
+                        {isSaving ? (
+                          <span className="text-xs">...</span>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                        )}
+                      </button>
+                      {(entry?.entryTime || entry?.absenceType) && (
+                        <button
+                          onClick={() => clearDay(day.dateStr)}
+                          disabled={isSaving}
+                          className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-red-500 hover:bg-red-100 transition"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </main>
 
       {/* Edit Modal */}
       {editingDay && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#F5F0E6] border-4 border-[#1A1A1A] p-6 w-full max-w-md">
-            <h3 className="text-xl font-black mb-4">
-              MODIFIER LE {new Date(editingDay.dateStr).toLocaleDateString('fr-FR')}
-            </h3>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-black">
+                Modifier le {new Date(editingDay.dateStr).toLocaleDateString('fr-FR')}
+              </h2>
+              <button
+                onClick={() => setEditingDay(null)}
+                className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
             {/* Type selector */}
             <div className="mb-4">
-              <label className="block font-bold text-[#666] mb-2">TYPE DE JOURNEE</label>
+              <label className="block text-xs font-medium text-[#4A5565] mb-2">Type de journee</label>
               <select
                 value={editingDay.absenceType}
                 onChange={(e) => setEditingDay({ ...editingDay, absenceType: e.target.value })}
-                className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+                className="input w-full"
               >
-                <option value="">Journée travaillée</option>
+                <option value="">Journee travaillee</option>
                 {Object.entries(ABSENCE_TYPES).map(([key, { label }]) => (
                   <option key={key} value={key}>{label}</option>
                 ))}
               </select>
             </div>
 
-            {/* Hours (only if working day or télétravail) */}
+            {/* Hours (only if working day or teletravail) */}
             {(!editingDay.absenceType || editingDay.absenceType === 'teletravail') && (
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="block font-bold text-[#666] mb-2">ENTREE</label>
+                  <label className="block text-xs font-medium text-[#4A5565] mb-2">Arrivee</label>
                   <input
                     type="time"
                     value={editingDay.entryTime}
                     onChange={(e) => setEditingDay({ ...editingDay, entryTime: e.target.value })}
-                    className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+                    className="input w-full"
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-[#666] mb-2">SORTIE</label>
+                  <label className="block text-xs font-medium text-[#4A5565] mb-2">Depart</label>
                   <input
                     type="time"
                     value={editingDay.exitTime}
                     onChange={(e) => setEditingDay({ ...editingDay, exitTime: e.target.value })}
-                    className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-bold"
+                    className="input w-full"
                   />
                 </div>
               </div>
@@ -471,42 +562,36 @@ export default function EmployeeDetailPage() {
             {/* Note */}
             {editingDay.absenceType && (
               <div className="mb-4">
-                <label className="block font-bold text-[#666] mb-2">NOTE (optionnel)</label>
+                <label className="block text-xs font-medium text-[#4A5565] mb-2">Note (optionnel)</label>
                 <input
                   type="text"
                   value={editingDay.absenceNote}
                   onChange={(e) => setEditingDay({ ...editingDay, absenceNote: e.target.value })}
-                  placeholder="Ex: Vacances, RDV médecin..."
-                  className="w-full p-3 bg-white border-4 border-[#1A1A1A] font-medium"
+                  placeholder="Ex: Vacances, RDV medecin..."
+                  className="input w-full"
                 />
               </div>
             )}
 
             {/* Actions */}
-            <div className="flex gap-4">
+            <div className="flex gap-3 pt-2">
               <button
                 onClick={() => setEditingDay(null)}
-                className="flex-1 p-3 bg-[#888] text-white font-bold hover:bg-[#666] transition"
+                className="btn btn-secondary flex-1"
               >
-                ANNULER
+                Annuler
               </button>
               <button
                 onClick={saveEditedDay}
                 disabled={savingDays[editingDay.dateStr]}
-                className="flex-1 p-3 bg-[#4CAF50] text-white font-bold hover:bg-[#3D8B40] transition"
+                className="btn btn-primary flex-1"
               >
-                {savingDays[editingDay.dateStr] ? '...' : 'ENREGISTRER'}
+                {savingDays[editingDay.dateStr] ? '...' : 'Confirmer'}
               </button>
             </div>
           </div>
         </div>
       )}
-
-      <footer className="fixed bottom-0 left-0 right-0 h-2 flex">
-        <div className="flex-1 bg-[#E63946]"></div>
-        <div className="flex-1 bg-[#FFD23F]"></div>
-        <div className="flex-1 bg-[#2D5A9E]"></div>
-      </footer>
     </div>
   );
 }

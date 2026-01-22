@@ -1,16 +1,48 @@
 @import "tailwindcss";
 
 :root {
-  --bauhaus-cream: #F5F0E6;
-  --bauhaus-black: #1A1A1A;
-  --bauhaus-red: #E63946;
-  --bauhaus-blue: #2D5A9E;
-  --bauhaus-yellow: #FFD23F;
-  --bauhaus-green: #4CAF50;
+  /* Color Palette */
+  --primary: #F45757;
+  --primary-light: #FEE2E2;
+  --primary-dark: #DC2626;
+
+  --accent: #4A5565;
+  --accent-light: #E5E7EB;
+  --accent-dark: #374151;
+
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F9FAFB;
+  --bg-tertiary: #F3F4F6;
+  --bg-dark: #1F2937;
+
+  /* Text colors */
+  --text-primary: #000000;
+  --text-secondary: #4A5565;
+  --text-muted: #9CA3AF;
+
+  /* Status colors */
+  --emerald-50: #ECFDF5;
+  --emerald-400: #34D399;
+  --emerald-500: #10B981;
+  --emerald-700: #047857;
+  --orange-50: #FFF7ED;
+  --orange-100: #FFEDD5;
+  --orange-400: #FB923C;
+  --orange-600: #EA580C;
+  --red-50: #FEF2F2;
+  --red-400: #F87171;
+  --red-500: #EF4444;
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-card-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
+  --background: var(--bg-primary);
+  --foreground: var(--text-primary);
 }
 
 @theme inline {
-  --font-sans: var(--font-space-grotesk);
+  --font-sans: var(--font-lexend);
 }
 
 * {
@@ -18,56 +50,197 @@
 }
 
 body {
-  background: var(--bauhaus-cream);
-  color: var(--bauhaus-black);
-  font-family: var(--font-space-grotesk), 'Space Grotesk', system-ui, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-lexend), 'Lexend', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Bauhaus-style inputs */
-input[type="text"],
-input[type="number"],
-input[type="date"],
-input[type="time"] {
-  font-family: inherit;
+/* Card styles */
+.card {
+  background: var(--bg-primary);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-card);
+  transition: all 0.2s ease;
 }
 
-input[type="time"]::-webkit-calendar-picker-indicator,
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(1);
-  background-color: var(--bauhaus-black);
-  padding: 4px;
+.card:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.card-dark {
+  background: var(--bg-dark);
+  border-radius: 1rem;
+}
+
+/* Button styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
   cursor: pointer;
+  border: none;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+.btn-secondary {
+  background: white;
+  color: var(--accent);
+  border: 1px solid var(--accent-light);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-secondary);
+}
+
+.btn-danger {
+  background: var(--red-50);
+  color: var(--red-500);
+}
+
+.btn-danger:hover {
+  background: #FEE2E2;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* Input styles */
+.input {
+  background: white;
+  border: 1px solid var(--accent-light);
+  color: var(--text-primary);
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.5rem;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(244, 87, 87, 0.1);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Badge styles */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.badge-success {
+  background: var(--emerald-50);
+  color: var(--emerald-700);
+}
+
+.badge-warning {
+  background: var(--orange-50);
+  color: var(--orange-600);
+}
+
+.badge-danger {
+  background: var(--red-50);
+  color: var(--red-500);
+}
+
+.badge-accent {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+.badge-primary {
+  background: var(--primary-light);
+  color: var(--primary);
 }
 
 /* Selection styling */
 ::selection {
-  background: var(--bauhaus-yellow);
-  color: var(--bauhaus-black);
-}
-
-/* Focus states */
-input:focus,
-button:focus {
-  outline: 4px solid var(--bauhaus-yellow);
-  outline-offset: -4px;
+  background: var(--primary-light);
+  color: var(--text-primary);
 }
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 12px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bauhaus-cream);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bauhaus-black);
-  border: 2px solid var(--bauhaus-cream);
+  background: var(--accent-light);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--bauhaus-red);
+  background: var(--accent);
+}
+
+/* Date/time picker styling */
+input[type="time"],
+input[type="date"] {
+  color-scheme: light;
+}
+
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: none;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+input[type="time"]::-webkit-calendar-picker-indicator:hover,
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+/* Animations */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
 }

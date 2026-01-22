@@ -6,6 +6,7 @@ export const employees = pgTable('employees', {
   lastName: text('last_name').notNull(),
   position: text('position'),
   hoursPerWeek: real('hours_per_week').notNull().default(35),
+  avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
