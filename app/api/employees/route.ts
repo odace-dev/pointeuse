@@ -23,6 +23,18 @@ function getRandomAvatar(): string {
 export async function GET() {
   try {
     const allEmployees = await db.select().from(employees).orderBy(desc(employees.createdAt));
+
+    // Auto-assign avatars to employees without one
+    const { eq, isNull } = await import('drizzle-orm');
+    for (const emp of allEmployees) {
+      if (!emp.avatarUrl) {
+        await db.update(employees)
+          .set({ avatarUrl: getRandomAvatar() })
+          .where(eq(employees.id, emp.id));
+        emp.avatarUrl = getRandomAvatar();
+      }
+    }
+
     return NextResponse.json(allEmployees);
   } catch (error) {
     console.error('Error fetching employees:', error);

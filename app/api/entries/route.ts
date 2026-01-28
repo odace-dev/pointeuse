@@ -54,11 +54,11 @@ export async function POST(request: Request) {
       ));
 
     if (existing.length > 0) {
-      // Update existing
+      // Update existing - use undefined check to allow null values (for clearing)
       const [updated] = await db.update(timeEntries)
         .set({
-          entryTime: entryTime ?? existing[0].entryTime,
-          exitTime: exitTime ?? existing[0].exitTime,
+          entryTime: entryTime !== undefined ? entryTime : existing[0].entryTime,
+          exitTime: exitTime !== undefined ? exitTime : existing[0].exitTime,
           excluded: excluded ?? existing[0].excluded,
           absenceType: absenceType !== undefined ? absenceType : existing[0].absenceType,
           absenceNote: absenceNote !== undefined ? absenceNote : existing[0].absenceNote,

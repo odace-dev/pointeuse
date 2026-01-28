@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import Header from '@/components/Header';
 import {
   calculateWorkedHoursFromStrings,
   formatHours,
@@ -10,6 +11,7 @@ import {
   getWeekStart,
   getMonthKey,
 } from '@/lib/utils';
+import { ABSENCE_TYPES } from '@/db/schema';
 
 interface Employee {
   id: string;
@@ -27,12 +29,14 @@ interface TimeEntry {
   entryTime: string | null;
   exitTime: string | null;
   excluded: boolean;
+  absenceType: string | null;
 }
 
 interface LocalEntry {
   entryTime: string;
   exitTime: string;
   excluded: boolean;
+  absenceType: string | null;
   saved: boolean;
   saving: boolean;
 }
@@ -57,6 +61,9 @@ export default function PointeusePage() {
   const [selectedDate, setSelectedDate] = useState(getTodayDate());
   const [loading, setLoading] = useState(true);
   const [localEntries, setLocalEntries] = useState<Record<string, LocalEntry>>({});
+  const [excludeModalFor, setExcludeModalFor] = useState<string | null>(null);
+  const [globalPeriod, setGlobalPeriod] = useState<'week' | 'month' | 'total'>('total');
+  const saveTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -91,6 +98,7 @@ export default function PointeusePage() {
         entryTime: existing?.entryTime || '',
         exitTime: existing?.exitTime || '',
         excluded: existing?.excluded || false,
+        absenceType: existing?.absenceType || null,
         saved: true,
         saving: false,
       };
@@ -98,57 +106,101 @@ export default function PointeusePage() {
     setLocalEntries(newLocalEntries);
   }, [employees, entries, selectedDate]);
 
-  const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime' | 'excluded', value: string | boolean) => {
-    setLocalEntries(prev => ({
-      ...prev,
-      [employeeId]: {
+  const autoSave = useCallback((employeeId: string, updatedEntry: LocalEntry) => {
+    // Clear existing timeout for this employee
+    if (saveTimeoutRef.current[employeeId]) {
+      clearTimeout(saveTimeoutRef.current[employeeId]);
+    }
+
+    // Debounce save by 500ms
+    saveTimeoutRef.current[employeeId] = setTimeout(async () => {
+      setLocalEntries(prev => ({
+        ...prev,
+        [employeeId]: { ...prev[employeeId], saving: true },
+      }));
+
+      try {
+        const res = await fetch('/api/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employeeId,
+            date: selectedDate,
+            entryTime: updatedEntry.entryTime || null,
+            exitTime: updatedEntry.exitTime || null,
+            excluded: updatedEntry.excluded,
+            absenceType: updatedEntry.absenceType,
+          }),
+        });
+
+        if (res.ok) {
+          const savedEntry = await res.json();
+          setEntries(prev => {
+            const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
+            return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
+          });
+          setLocalEntries(prev => ({
+            ...prev,
+            [employeeId]: { ...prev[employeeId], saved: true, saving: false },
+          }));
+        }
+      } catch (error) {
+        console.error('Error saving entry:', error);
+        setLocalEntries(prev => ({
+          ...prev,
+          [employeeId]: { ...prev[employeeId], saving: false },
+        }));
+      }
+    }, 500);
+  }, [selectedDate]);
+
+  const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime' | 'excluded' | 'absenceType', value: string | boolean | null) => {
+    setLocalEntries(prev => {
+      const updated = {
         ...prev[employeeId],
         [field]: value,
         saved: false,
-      },
-    }));
+      };
+      // Auto-save after update
+      autoSave(employeeId, updated);
+      return {
+        ...prev,
+        [employeeId]: updated,
+      };
+    });
   };
 
-  const saveEntry = async (employeeId: string) => {
-    const local = localEntries[employeeId];
-    if (!local) return;
-
-    setLocalEntries(prev => ({
-      ...prev,
-      [employeeId]: { ...prev[employeeId], saving: true },
-    }));
-
-    try {
-      const res = await fetch('/api/entries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeId,
-          date: selectedDate,
-          entryTime: local.entryTime || null,
-          exitTime: local.exitTime || null,
-          excluded: local.excluded,
-        }),
-      });
-
-      if (res.ok) {
-        const savedEntry = await res.json();
-        setEntries(prev => {
-          const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
-          return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
-        });
-        setLocalEntries(prev => ({
-          ...prev,
-          [employeeId]: { ...prev[employeeId], saved: true, saving: false },
-        }));
-      }
-    } catch (error) {
-      console.error('Error saving entry:', error);
-      setLocalEntries(prev => ({
+  const handleExcludeWithReason = (employeeId: string, absenceType: string) => {
+    setLocalEntries(prev => {
+      const updated = {
+        ...prev[employeeId],
+        excluded: true,
+        absenceType,
+        saved: false,
+      };
+      autoSave(employeeId, updated);
+      return {
         ...prev,
-        [employeeId]: { ...prev[employeeId], saving: false },
-      }));
-    }
+        [employeeId]: updated,
+      };
+    });
+    setExcludeModalFor(null);
+  };
+
+  const handleCancelExclusion = (employeeId: string) => {
+    setLocalEntries(prev => {
+      const updated = {
+        ...prev[employeeId],
+        excluded: false,
+        absenceType: null,
+        saved: false,
+      };
+      autoSave(employeeId, updated);
+      return {
+        ...prev,
+        [employeeId]: updated,
+      };
+    });
   };
 
   const weekStart = getWeekStart(new Date(selectedDate));
@@ -225,14 +277,54 @@ export default function PointeusePage() {
     return totalWorked - (daysWorked * (employee.hoursPerWeek / 5));
   };
 
+  const goToPreviousDay = () => {
+    const date = new Date(selectedDate);
+    date.setDate(date.getDate() - 1);
+    setSelectedDate(formatLocalDate(date.getFullYear(), date.getMonth(), date.getDate()));
+  };
+
+  const goToNextDay = () => {
+    const date = new Date(selectedDate);
+    date.setDate(date.getDate() + 1);
+    setSelectedDate(formatLocalDate(date.getFullYear(), date.getMonth(), date.getDate()));
+  };
+
   const globalStats = useMemo(() => {
     let totalWorked = 0;
     let totalExpected = 0;
 
+    // Calculate date range based on period
+    const getDateRange = () => {
+      const selected = new Date(selectedDate);
+      if (globalPeriod === 'week') {
+        const start = new Date(weekStart);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        return { start, end };
+      } else if (globalPeriod === 'month') {
+        const [year, month] = monthKey.split('-').map(Number);
+        const start = new Date(year, month - 1, 1);
+        const end = new Date(year, month, 0);
+        return { start, end };
+      }
+      return null; // total = no filter
+    };
+
+    const range = getDateRange();
+
     employees.forEach(emp => {
-      const empEntries = entries.filter(
+      let empEntries = entries.filter(
         e => e.employeeId === emp.id && !e.excluded && e.entryTime && e.exitTime
       );
+
+      // Filter by date range if not total
+      if (range) {
+        empEntries = empEntries.filter(e => {
+          const entryDate = new Date(e.date);
+          return entryDate >= range.start && entryDate <= range.end;
+        });
+      }
+
       totalWorked += empEntries.reduce(
         (sum, e) => sum + calculateWorkedHoursFromStrings(e.entryTime, e.exitTime), 0
       );
@@ -245,7 +337,7 @@ export default function PointeusePage() {
       totalExpected,
       surplus: totalWorked - totalExpected,
     };
-  }, [employees, entries]);
+  }, [employees, entries, globalPeriod, selectedDate, weekStart, monthKey]);
 
   const getInitials = (firstName: string, lastName: string) => {
     return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
@@ -261,44 +353,19 @@ export default function PointeusePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center p-4">
-        <div className="text-center">
-          <div className="w-12 h-12 rounded-xl bg-[#F45757] mx-auto mb-4 animate-pulse"></div>
-          <p className="text-[#4A5565]">Chargement...</p>
-        </div>
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
+        <img
+          src="/logo.svg"
+          alt="Chargement..."
+          className="h-16 w-auto animate-pulse"
+        />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-white pb-8">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <img src="/logo.svg" alt="Logo" className="h-10 w-auto" />
-            </div>
-            <nav className="flex items-center gap-2">
-              <span className="px-4 py-2 text-sm font-medium text-[#F45757] bg-red-50 rounded-lg">
-                Pointer
-              </span>
-              <Link
-                href="/dashboard"
-                className="px-4 py-2 text-sm font-medium text-[#4A5565] hover:text-black hover:bg-gray-100 rounded-lg transition-all"
-              >
-                Dashboard
-              </Link>
-              <Link
-                href="/setup"
-                className="px-4 py-2 text-sm font-medium text-[#4A5565] hover:text-black hover:bg-gray-100 rounded-lg transition-all"
-              >
-                Config
-              </Link>
-            </nav>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-transparent pb-8 relative z-10">
+      <Header currentPage="pointer" />
 
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         {/* Date & Global Stats */}
@@ -313,30 +380,82 @@ export default function PointeusePage() {
               </div>
               <span className="text-sm font-medium text-[#4A5565]">Date</span>
             </div>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="input w-full text-lg font-semibold text-black"
-            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={goToPreviousDay}
+                className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-[#F45757] hover:text-white text-[#4A5565] flex items-center justify-center transition-all"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="input flex-1 text-lg font-semibold text-black text-center"
+              />
+              <button
+                onClick={goToNextDay}
+                className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-[#F45757] hover:text-white text-[#4A5565] flex items-center justify-center transition-all"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Global Stats Card */}
-          <div className="bg-orange-50 border-2 border-dashed border-orange-300 rounded-xl p-5">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
-                <svg className="w-4 h-4 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                </svg>
+          <div className="bg-[#EEF2FF] border border-[#2A3EF7]/20 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#2A3EF7]/10 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-[#2A3EF7]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </div>
+                <span className="text-sm font-medium text-[#2A3EF7]">Bilan global</span>
               </div>
-              <span className="text-sm font-medium text-orange-600">Bilan global</span>
+              <div className="flex bg-white/50 rounded-lg p-0.5">
+                <button
+                  onClick={() => setGlobalPeriod('week')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                    globalPeriod === 'week'
+                      ? 'bg-[#2A3EF7] text-white'
+                      : 'text-[#2A3EF7]/70 hover:text-[#2A3EF7]'
+                  }`}
+                >
+                  Sem.
+                </button>
+                <button
+                  onClick={() => setGlobalPeriod('month')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                    globalPeriod === 'month'
+                      ? 'bg-[#2A3EF7] text-white'
+                      : 'text-[#2A3EF7]/70 hover:text-[#2A3EF7]'
+                  }`}
+                >
+                  Mois
+                </button>
+                <button
+                  onClick={() => setGlobalPeriod('total')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                    globalPeriod === 'total'
+                      ? 'bg-[#2A3EF7] text-white'
+                      : 'text-[#2A3EF7]/70 hover:text-[#2A3EF7]'
+                  }`}
+                >
+                  Total
+                </button>
+              </div>
             </div>
             <div className="flex items-end justify-between">
               <div>
                 <p className={`text-3xl font-bold ${globalStats.surplus >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                   {formatHours(globalStats.surplus)}
                 </p>
-                <p className="text-sm text-orange-500 mt-1">
+                <p className="text-sm text-[#2A3EF7]/70 mt-1">
                   {formatHoursSimple(globalStats.totalWorked)} / {formatHoursSimple(globalStats.totalExpected)}
                 </p>
               </div>
@@ -386,11 +505,14 @@ export default function PointeusePage() {
               return (
                 <div
                   key={employee.id}
-                  className={`bg-white rounded-xl p-5 border border-gray-200 shadow-sm transition-all hover:shadow-md ${local.excluded ? 'opacity-60' : ''}`}
+                  className={`bg-white rounded-xl p-3 sm:p-5 border border-gray-200 shadow-sm transition-all hover:shadow-md ${local.excluded ? 'opacity-60' : ''}`}
                 >
                   {/* Header row */}
                   <div className="flex items-center justify-between mb-4">
-                    <Link href={`/employe/${employee.id}`} className="flex items-center gap-3 hover:opacity-80 transition">
+                    <Link href={`/employe/${employee.id}`} className="flex items-center gap-2 hover:opacity-80 transition group">
+                      <svg className="w-4 h-4 text-gray-300 group-hover:text-[#F45757] transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
                       {employee.avatarUrl ? (
                         <img
                           src={employee.avatarUrl}
@@ -402,9 +524,9 @@ export default function PointeusePage() {
                           {getInitials(employee.firstName, employee.lastName)}
                         </div>
                       )}
-                      <div>
-                        <h3 className="font-semibold text-black">{employee.firstName} {employee.lastName}</h3>
-                        <p className="text-sm text-[#4A5565]">{employee.position || 'Personnel'} • {employee.hoursPerWeek}h/sem</p>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-black truncate">{employee.firstName} {employee.lastName}</h3>
+                        <p className="text-xs sm:text-sm text-[#4A5565] truncate">{employee.position || 'Personnel'} • {employee.hoursPerWeek}h/sem</p>
                       </div>
                     </Link>
                     <div className="flex items-center gap-2">
@@ -424,13 +546,26 @@ export default function PointeusePage() {
                   {/* Time inputs */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-6 h-6 rounded-lg bg-gray-200 flex items-center justify-center">
-                          <svg className="w-3 h-3 text-[#4A5565]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14" />
-                          </svg>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg bg-gray-200 flex items-center justify-center">
+                            <svg className="w-3 h-3 text-[#4A5565]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14" />
+                            </svg>
+                          </div>
+                          <span className="text-xs font-medium text-[#4A5565]">Arrivee</span>
                         </div>
-                        <span className="text-xs font-medium text-[#4A5565]">Arrivee</span>
+                        {local.entryTime && !local.excluded && (
+                          <button
+                            onClick={() => updateLocalEntry(employee.id, 'entryTime', '')}
+                            className="w-5 h-5 rounded-full bg-gray-200 hover:bg-red-100 text-gray-400 hover:text-red-500 flex items-center justify-center transition-all"
+                            title="Effacer"
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
                       </div>
                       <input
                         type="time"
@@ -442,13 +577,26 @@ export default function PointeusePage() {
                     </div>
 
                     <div className="bg-orange-50 rounded-xl p-3 border border-orange-100">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-6 h-6 rounded-lg bg-orange-100 flex items-center justify-center">
-                          <svg className="w-3 h-3 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l4 4m0 0l-4 4m4-4H3" />
-                          </svg>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg bg-orange-100 flex items-center justify-center">
+                            <svg className="w-3 h-3 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l4 4m0 0l-4 4m4-4H3" />
+                            </svg>
+                          </div>
+                          <span className="text-xs font-medium text-[#4A5565]">Depart</span>
                         </div>
-                        <span className="text-xs font-medium text-[#4A5565]">Depart</span>
+                        {local.exitTime && !local.excluded && (
+                          <button
+                            onClick={() => updateLocalEntry(employee.id, 'exitTime', '')}
+                            className="w-5 h-5 rounded-full bg-orange-100 hover:bg-red-100 text-orange-400 hover:text-red-500 flex items-center justify-center transition-all"
+                            title="Effacer"
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
                       </div>
                       <input
                         type="time"
@@ -459,37 +607,58 @@ export default function PointeusePage() {
                       />
                     </div>
 
-                    <div className="bg-orange-50 border border-dashed border-orange-300 rounded-xl p-3">
-                      <p className="text-orange-600 text-xs font-medium mb-2">Duree</p>
+                    <div className="p-3">
+                      <p className="text-[#4A5565] text-xs font-medium mb-2">Duree</p>
                       <p className="text-xl font-bold text-black">
                         {local.excluded ? '--:--' : formatHoursSimple(worked)}
                       </p>
                     </div>
 
-                    <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-2 relative">
                       <button
-                        onClick={() => updateLocalEntry(employee.id, 'excluded', !local.excluded)}
+                        onClick={() => local.excluded ? handleCancelExclusion(employee.id) : setExcludeModalFor(employee.id)}
                         className={`flex-1 rounded-lg text-sm font-medium transition-all ${
                           local.excluded
                             ? 'bg-orange-50 text-orange-600 hover:bg-orange-100'
                             : 'bg-gray-100 text-[#4A5565] hover:bg-gray-200'
                         }`}
                       >
-                        {local.excluded ? 'Exclu' : 'Exclure'}
+                        {local.excluded && local.absenceType
+                          ? ABSENCE_TYPES[local.absenceType as keyof typeof ABSENCE_TYPES]?.label || 'Exclu'
+                          : local.excluded ? 'Exclu' : 'Exclure'}
                       </button>
-                      <button
-                        onClick={() => saveEntry(employee.id)}
-                        disabled={local.saved || local.saving}
-                        className={`flex-1 rounded-lg text-sm font-medium transition-all ${
-                          local.saved
-                            ? 'bg-emerald-50 text-emerald-600'
-                            : local.saving
-                            ? 'bg-gray-100 text-gray-400'
-                            : 'bg-[#F45757] text-white hover:bg-[#DC2626]'
-                        }`}
-                      >
-                        {local.saving ? '...' : local.saved ? 'OK' : 'Sauver'}
-                      </button>
+
+                      {/* Modal exclusion */}
+                      {excludeModalFor === employee.id && (
+                        <div className="absolute top-0 right-0 z-50 bg-white rounded-xl shadow-xl border border-gray-200 p-2 min-w-[180px]">
+                          <p className="text-xs font-medium text-[#4A5565] px-2 py-1 mb-1">Motif d'absence</p>
+                          {Object.entries(ABSENCE_TYPES).map(([key, { label, color }]) => (
+                            <button
+                              key={key}
+                              onClick={() => handleExcludeWithReason(employee.id, key)}
+                              className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 transition flex items-center gap-2"
+                            >
+                              <span
+                                className="w-3 h-3 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: color }}
+                              />
+                              {label}
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => setExcludeModalFor(null)}
+                            className="w-full text-center px-3 py-2 text-xs text-gray-400 hover:text-gray-600 transition mt-1"
+                          >
+                            Annuler
+                          </button>
+                        </div>
+                      )}
+                      {/* Indicateur de sauvegarde */}
+                      {local.saving && (
+                        <div className="flex-1 rounded-lg bg-gray-100 text-gray-400 text-sm font-medium text-center py-1">
+                          ...
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -498,7 +667,7 @@ export default function PointeusePage() {
                     <StatBox label="Jour" value={daySurplus} excluded={local.excluded} />
                     <StatBox label="Semaine" value={weekSurplus} />
                     <StatBox label="Mois" value={monthSurplus} />
-                    <StatBox label="Total" value={totalSurplus} highlight />
+                    <StatBox label="Total" value={totalSurplus} />
                   </div>
                 </div>
               );
@@ -510,17 +679,16 @@ export default function PointeusePage() {
   );
 }
 
-function StatBox({ label, value, highlight = false, excluded = false }: {
+function StatBox({ label, value, excluded = false }: {
   label: string;
   value: number;
-  highlight?: boolean;
   excluded?: boolean;
 }) {
   const isPositive = value >= 0;
 
   return (
-    <div className={`p-2 rounded-lg text-center ${highlight ? 'bg-orange-50 border border-dashed border-orange-300' : ''}`}>
-      <p className={`text-[10px] font-medium mb-1 ${highlight ? 'text-orange-600' : 'text-[#9CA3AF]'}`}>
+    <div className="p-2 text-center">
+      <p className="text-[10px] font-medium mb-1 text-[#9CA3AF]">
         {label}
       </p>
       <p className={`text-sm font-bold ${

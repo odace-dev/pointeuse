@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Lexend } from "next/font/google";
 import "./globals.css";
+import FloatingFaces from "@/components/FloatingFaces";
 
 const lexend = Lexend({
   variable: "--font-lexend",
@@ -11,6 +12,14 @@ const lexend = Lexend({
 export const metadata: Metadata = {
   title: "Dr!!!ng",
   description: "Gestion du temps de travail",
+  robots: {
+    index: false,
+    follow: false,
+    googleBot: {
+      index: false,
+      follow: false,
+    },
+  },
 };
 
 export default function RootLayout({
@@ -21,6 +30,7 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body className={`${lexend.variable} antialiased bg-white`}>
+        <FloatingFaces />
         {children}
       </body>
     </html>
