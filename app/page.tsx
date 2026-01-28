@@ -63,7 +63,6 @@ export default function PointeusePage() {
   const [localEntries, setLocalEntries] = useState<Record<string, LocalEntry>>({});
   const [excludeModalFor, setExcludeModalFor] = useState<string | null>(null);
   const [globalPeriod, setGlobalPeriod] = useState<'week' | 'month' | 'total'>('total');
-  const saveTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -106,101 +105,83 @@ export default function PointeusePage() {
     setLocalEntries(newLocalEntries);
   }, [employees, entries, selectedDate]);
 
-  const autoSave = useCallback((employeeId: string, updatedEntry: LocalEntry) => {
-    // Clear existing timeout for this employee
-    if (saveTimeoutRef.current[employeeId]) {
-      clearTimeout(saveTimeoutRef.current[employeeId]);
-    }
-
-    // Debounce save by 500ms
-    saveTimeoutRef.current[employeeId] = setTimeout(async () => {
-      setLocalEntries(prev => ({
-        ...prev,
-        [employeeId]: { ...prev[employeeId], saving: true },
-      }));
-
-      try {
-        const res = await fetch('/api/entries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            employeeId,
-            date: selectedDate,
-            entryTime: updatedEntry.entryTime || null,
-            exitTime: updatedEntry.exitTime || null,
-            excluded: updatedEntry.excluded,
-            absenceType: updatedEntry.absenceType,
-          }),
-        });
-
-        if (res.ok) {
-          const savedEntry = await res.json();
-          setEntries(prev => {
-            const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
-            return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
-          });
-          setLocalEntries(prev => ({
-            ...prev,
-            [employeeId]: { ...prev[employeeId], saved: true, saving: false },
-          }));
-        }
-      } catch (error) {
-        console.error('Error saving entry:', error);
-        setLocalEntries(prev => ({
-          ...prev,
-          [employeeId]: { ...prev[employeeId], saving: false },
-        }));
-      }
-    }, 500);
-  }, [selectedDate]);
-
   const updateLocalEntry = (employeeId: string, field: 'entryTime' | 'exitTime' | 'excluded' | 'absenceType', value: string | boolean | null) => {
-    setLocalEntries(prev => {
-      const updated = {
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: {
         ...prev[employeeId],
         [field]: value,
         saved: false,
-      };
-      // Auto-save after update
-      autoSave(employeeId, updated);
-      return {
+      },
+    }));
+  };
+
+  const saveEntry = async (employeeId: string) => {
+    const local = localEntries[employeeId];
+    if (!local) return;
+
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: { ...prev[employeeId], saving: true },
+    }));
+
+    try {
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId,
+          date: selectedDate,
+          entryTime: local.entryTime || null,
+          exitTime: local.exitTime || null,
+          excluded: local.excluded,
+          absenceType: local.absenceType,
+        }),
+      });
+
+      if (res.ok) {
+        const savedEntry = await res.json();
+        setEntries(prev => {
+          const filtered = prev.filter(e => !(e.employeeId === employeeId && e.date === selectedDate));
+          return [...filtered, { ...savedEntry, date: normalizeDate(savedEntry.date) }];
+        });
+        setLocalEntries(prev => ({
+          ...prev,
+          [employeeId]: { ...prev[employeeId], saved: true, saving: false },
+        }));
+      }
+    } catch (error) {
+      console.error('Error saving entry:', error);
+      setLocalEntries(prev => ({
         ...prev,
-        [employeeId]: updated,
-      };
-    });
+        [employeeId]: { ...prev[employeeId], saving: false },
+      }));
+    }
   };
 
   const handleExcludeWithReason = (employeeId: string, absenceType: string) => {
-    setLocalEntries(prev => {
-      const updated = {
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: {
         ...prev[employeeId],
         excluded: true,
         absenceType,
         saved: false,
-      };
-      autoSave(employeeId, updated);
-      return {
-        ...prev,
-        [employeeId]: updated,
-      };
-    });
+      },
+    }));
     setExcludeModalFor(null);
   };
 
   const handleCancelExclusion = (employeeId: string) => {
-    setLocalEntries(prev => {
-      const updated = {
+    setLocalEntries(prev => ({
+      ...prev,
+      [employeeId]: {
         ...prev[employeeId],
         excluded: false,
         absenceType: null,
         saved: false,
-      };
-      autoSave(employeeId, updated);
-      return {
-        ...prev,
-        [employeeId]: updated,
-      };
-    });
+      },
+    }));
   };
 
   const weekStart = getWeekStart(new Date(selectedDate));
@@ -653,12 +634,20 @@ export default function PointeusePage() {
                           </button>
                         </div>
                       )}
-                      {/* Indicateur de sauvegarde */}
-                      {local.saving && (
-                        <div className="flex-1 rounded-lg bg-gray-100 text-gray-400 text-sm font-medium text-center py-1">
-                          ...
-                        </div>
-                      )}
+                      {/* Bouton sauvegarde */}
+                      <button
+                        onClick={() => saveEntry(employee.id)}
+                        disabled={local.saved || local.saving}
+                        className={`flex-1 rounded-lg text-sm font-medium transition-all ${
+                          local.saving
+                            ? 'bg-gray-100 text-gray-400 cursor-wait'
+                            : local.saved
+                            ? 'bg-emerald-50 text-emerald-600 cursor-default'
+                            : 'bg-[#F45757] text-white hover:bg-[#E04646]'
+                        }`}
+                      >
+                        {local.saving ? '...' : local.saved ? '✓ Enregistré' : 'Enregistrer'}
+                      </button>
                     </div>
                   </div>
 
